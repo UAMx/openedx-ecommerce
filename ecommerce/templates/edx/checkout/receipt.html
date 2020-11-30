@@ -17,7 +17,11 @@
 {% endblock title %}
 
 {% block javascript %}
-  <script src="{% static 'js/apps/order_receipt_app.js' %}"></script>
+  <script src="{% static 'js/apps/order_receipt_app.js' %}">
+  </script>
+<script type="text/javascript">
+   var  awinProductTrackingData = `{{ product_tracking }}`;
+</script>
 {% endblock javascript %}
 
 {% block navbar %}
