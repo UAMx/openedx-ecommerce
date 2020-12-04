@@ -162,6 +162,8 @@
                                 id="{{ processor.NAME|lower }}">
                             {% if processor.NAME == 'cybersource' %}
                                 {% trans "Checkout" as tmsg %}{{ tmsg | force_escape }}
+			    {% elif processor.NAME == 'redsys' %}
+                                {% trans "Checkout" as tmsg %}{{ tmsg | force_escape }}
                             {% elif processor.NAME == 'paypal' %}
                                 {# Translators: Do NOT translate the name PayPal. #}
                                 {% trans "Checkout with PayPal" as tmsg %}{{ tmsg | force_escape }}
