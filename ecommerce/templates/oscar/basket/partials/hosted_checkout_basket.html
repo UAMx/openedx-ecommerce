@@ -155,7 +155,7 @@
                                 data-track-checkout-type="hosted"
                                 class="btn payment-button"
                                 id="{{ processor.NAME|lower }}">
-                            {% if processor.NAME == 'cybersource' %}
+                            {% if processor.NAME == 'cybersource' or processor.NAME == 'redsys' %}
                                 {% trans "Checkout" %}
                             {% elif processor.NAME == 'paypal' %}
                                 {# Translators: Do NOT translate the name PayPal. #}
