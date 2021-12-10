@@ -40,6 +40,6 @@ urlpatterns = [
     url(r'^paypal/', include((PAYPAL_URLS, 'paypal'))),
     url(r'^sdn/', include((SDN_URLS, 'sdn'))),
     url(r'^stripe/', include((STRIPE_URLS, 'stripe'))),
-    url(r'^redsys/', include((STRIPE_URLS, 'redsys'))),
+    url(r'^redsys/', include((REDSYS_URLS, 'redsys'))),
 ]
 

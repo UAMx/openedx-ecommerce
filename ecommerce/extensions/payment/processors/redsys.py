@@ -11,7 +11,7 @@ import hmac
 import hashlib
 import time
 from decimal import Decimal
-from urlparse import urljoin
+from urllib.parse import urljoin
 from django import forms
 
 import waffle
