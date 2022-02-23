@@ -1,11 +1,11 @@
 """ PayPal payment processing. """
-from __future__ import unicode_literals
+
 
 import logging
 import re
 import uuid
 from decimal import Decimal
-from urlparse import urljoin
+from urllib.parse import urljoin
 
 import paypalrestsdk
 import waffle
@@ -19,7 +19,7 @@ from ecommerce.core.url_utils import get_ecommerce_url
 from ecommerce.extensions.payment.constants import PAYPAL_LOCALES
 from ecommerce.extensions.payment.models import PaypalProcessorConfiguration, PaypalWebProfile
 from ecommerce.extensions.payment.processors import BasePaymentProcessor, HandledProcessorResponse
-from ecommerce.extensions.payment.utils import middle_truncate
+from ecommerce.extensions.payment.utils import get_basket_program_uuid, middle_truncate
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +70,8 @@ class Paypal(BasePaymentProcessor):
         default_paypal_locale = PAYPAL_LOCALES.get(re.split(r'[_-]', get_language())[0].lower())
         if not language_code:
             return default_paypal_locale
-        else:
-            return PAYPAL_LOCALES.get(re.split(r'[_-]', language_code)[0].lower(), default_paypal_locale)
+
+        return PAYPAL_LOCALES.get(re.split(r'[_-]', language_code)[0].lower(), default_paypal_locale)
 
     def create_temporary_web_profile(self, locale_code):
         """
@@ -94,14 +94,32 @@ class Paypal(BasePaymentProcessor):
                 )
                 logger.info(msg)
                 return web_profile.id
-            else:
-                msg = "Web profile creation encountered error [%s]. Will continue without one" % (
-                    web_profile.error
-                )
-                logger.warning(msg)
+
+            msg = "Web profile creation encountered error [%s]. Will continue without one" % (
+                web_profile.error
+            )
+            logger.warning(msg)
+            return None
 
         except Exception:  # pylint: disable=broad-except
             logger.warning("Creating PayPal WebProfile resulted in exception. Will continue without one.")
+            return None
+
+    def get_courseid_title(self, line):
+        """
+        Get CourseID & Title from basket item
+
+        Arguments:
+            line: basket item
+
+        Returns:
+             Concatenated string containing course id & title if exists.
+        """
+        courseid = ''
+        line_course = line.product.course
+        if line_course:
+            courseid = "{}|".format(line_course.id)
+        return courseid + line.product.title
 
     def get_transaction_parameters(self, basket, request=None, use_client_side_checkout=False, **kwargs):
         """
@@ -121,6 +139,8 @@ class Paypal(BasePaymentProcessor):
             GatewayError: Indicates a general error or unexpected behavior on the part of PayPal which prevented
                 a payment from being created.
         """
+        # PayPal requires that item names be at most 127 characters long.
+        PAYPAL_FREE_FORM_FIELD_MAX_SIZE = 127
         return_url = urljoin(get_ecommerce_url(), reverse('paypal:execute'))
         data = {
             'intent': 'sale',
@@ -133,18 +153,24 @@ class Paypal(BasePaymentProcessor):
             },
             'transactions': [{
                 'amount': {
-                    'total': unicode(basket.total_incl_tax),
+                    'total': str(basket.total_incl_tax),
                     'currency': basket.currency,
                 },
+                # Paypal allows us to send additional transaction related data in 'description' & 'custom' field
+                # Free form field, max length 127 characters
+                # description : program_id:<program_id>
+                'description': "program_id:{}".format(get_basket_program_uuid(basket)),
                 'item_list': {
                     'items': [
                         {
                             'quantity': line.quantity,
                             # PayPal requires that item names be at most 127 characters long.
-                            'name': middle_truncate(line.product.title, 127),
+                            # for courseid we're using 'name' field along with title,
+                            # concatenated field will be 'courseid|title'
+                            'name': middle_truncate(self.get_courseid_title(line), PAYPAL_FREE_FORM_FIELD_MAX_SIZE),
                             # PayPal requires that the sum of all the item prices (where price = price * quantity)
                             # equals to the total amount set in amount['total'].
-                            'price': unicode(line.line_price_incl_tax_incl_discounts / line.quantity),
+                            'price': str(line.line_price_incl_tax_incl_discounts / line.quantity),
                             'currency': line.stockrecord.price_currency,
                         }
                         for line in basket.all_lines()
@@ -176,30 +202,29 @@ class Paypal(BasePaymentProcessor):
                 payment.create()
                 if payment.success():
                     break
+                if i < available_attempts:
+                    logger.warning(
+                        u"Creating PayPal payment for basket [%d] was unsuccessful. Will retry.",
+                        basket.id,
+                        exc_info=True
+                    )
                 else:
-                    if i < available_attempts:
-                        logger.warning(
-                            u"Creating PayPal payment for basket [%d] was unsuccessful. Will retry.",
-                            basket.id,
-                            exc_info=True
-                        )
-                    else:
-                        error = self._get_error(payment)
-                        # pylint: disable=unsubscriptable-object
-                        entry = self.record_processor_response(
-                            error,
-                            transaction_id=error['debug_id'],
-                            basket=basket
-                        )
-                        logger.error(
-                            u"%s [%d], %s [%d].",
-                            "Failed to create PayPal payment for basket",
-                            basket.id,
-                            "PayPal's response recorded in entry",
-                            entry.id,
-                            exc_info=True
-                        )
-                        raise GatewayError(error)
+                    error = self._get_error(payment)
+                    # pylint: disable=unsubscriptable-object
+                    entry = self.record_processor_response(
+                        error,
+                        transaction_id=error['debug_id'],
+                        basket=basket
+                    )
+                    logger.error(
+                        u"%s [%d], %s [%d].",
+                        "Failed to create PayPal payment for basket",
+                        basket.id,
+                        "PayPal's response recorded in entry",
+                        entry.id,
+                        exc_info=True
+                    )
+                    raise GatewayError(error)
 
             except:  # pylint: disable=bare-except
                 if i < available_attempts:
@@ -352,7 +377,7 @@ class Paypal(BasePaymentProcessor):
 
             refund = sale.refund({
                 'amount': {
-                    'total': unicode(amount),
+                    'total': str(amount),
                     'currency': currency,
                 }
             })
@@ -367,11 +392,11 @@ class Paypal(BasePaymentProcessor):
             transaction_id = refund.id
             self.record_processor_response(refund.to_dict(), transaction_id=transaction_id, basket=basket)
             return transaction_id
-        else:
-            error = refund.error
-            entry = self.record_processor_response(error, transaction_id=error['debug_id'], basket=basket)
 
-            msg = "Failed to refund PayPal payment [{sale_id}]. " \
-                  "PayPal's response was recorded in entry [{response_id}].".format(sale_id=sale.id,
-                                                                                    response_id=entry.id)
-            raise GatewayError(msg)
+        error = refund.error
+        entry = self.record_processor_response(error, transaction_id=error['debug_id'], basket=basket)
+
+        msg = "Failed to refund PayPal payment [{sale_id}]. " \
+              "PayPal's response was recorded in entry [{response_id}].".format(sale_id=sale.id,
+                                                                                response_id=entry.id)
+        raise GatewayError(msg)

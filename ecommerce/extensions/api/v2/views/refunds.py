@@ -1,11 +1,18 @@
 """HTTP endpoints for interacting with refunds."""
+
+
+import logging
+
 from django.contrib.auth import get_user_model
+from django.db import transaction
+from django.utils.decorators import method_decorator
 from oscar.core.loading import get_model
 from rest_framework import generics, status
 from rest_framework.exceptions import ParseError
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
+from ecommerce.core.exceptions import MissingLmsUserIdException
 from ecommerce.extensions.api import serializers
 from ecommerce.extensions.api.exceptions import BadRequestException
 from ecommerce.extensions.api.permissions import CanActForUser
@@ -19,6 +26,8 @@ Order = get_model('order', 'Order')
 OrderLine = get_model('order', 'Line')
 Refund = get_model('refund', 'Refund')
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
 
 
 class RefundCreateView(generics.CreateAPIView):
@@ -42,8 +51,8 @@ class RefundCreateView(generics.CreateAPIView):
     """
     permission_classes = (IsAuthenticated, CanActForUser)
 
-    def get_serializer(self):
-        pass
+    def get_serializer(self, *args, **kwargs):
+        return None
 
     def create(self, request, *args, **kwargs):
         """
@@ -55,14 +64,18 @@ class RefundCreateView(generics.CreateAPIView):
             username (string): This is required by both types of refund
 
             course_run refund:
-            course_id (string): The course_id for wchich to refund for the given user
+            course_id (string): The course_id for which to refund for the given user
 
             course_entitlement refund:
-            order_number (string): The order for which to refund the coures entitlement
+            order_number (string): The order for which to refund the course entitlement
             entitlement_uuid (string): The UUID for the course entitlement for the given order to refund
 
         Returns:
             refunds (list): List of refunds created
+
+         Side effects:
+            If the given user does not have an LMS user id, tries to find it. If found, adds the id to the user and
+            saves the user. If the id cannot be found, writes custom metrics to record this fact.
         """
 
         course_id = request.data.get('course_id')
@@ -80,6 +93,19 @@ class RefundCreateView(generics.CreateAPIView):
             user = User.objects.get(username=username)
         except User.DoesNotExist:
             raise BadRequestException('User "{}" does not exist.'.format(username))
+
+        # Ensure the user has an LMS user id
+        try:
+            if request.user.is_authenticated:
+                requested_by = request.user.id
+            else:  # pragma: no cover
+                requested_by = None
+            called_from = u'refund processing for user {user_id} requested by {requested_by}'.format(
+                user_id=user.id,
+                requested_by=requested_by)
+            user.add_lms_user_id('ecommerce_missing_lms_user_id_refund', called_from)
+        except MissingLmsUserIdException:
+            raise BadRequestException('User {} does not have an LMS user id.'.format(user.id))
 
         # Try and create a refund for the passed in order
         if entitlement_uuid:
@@ -106,6 +132,7 @@ class RefundCreateView(generics.CreateAPIView):
         return Response([], status=status.HTTP_200_OK)
 
 
+@method_decorator(transaction.non_atomic_requests, name='dispatch')
 class RefundProcessView(generics.UpdateAPIView):
     """Process--approve or deny--refunds.
 
@@ -129,14 +156,15 @@ class RefundProcessView(generics.UpdateAPIView):
         if action not in (APPROVE, DENY, APPROVE_PAYMENT_ONLY):
             raise ParseError('The action [{}] is not valid.'.format(action))
 
-        refund = self.get_object()
-        result = False
+        with transaction.atomic():
+            refund = self.get_object()
+            result = False
 
-        if action in (APPROVE, APPROVE_PAYMENT_ONLY):
-            revoke_fulfillment = action == APPROVE
-            result = refund.approve(revoke_fulfillment=revoke_fulfillment)
-        elif action == DENY:
-            result = refund.deny()
+            if action in (APPROVE, APPROVE_PAYMENT_ONLY):
+                revoke_fulfillment = action == APPROVE
+                result = refund.approve(revoke_fulfillment=revoke_fulfillment)
+            elif action == DENY:
+                result = refund.deny()
 
         http_status = status.HTTP_200_OK if result else status.HTTP_500_INTERNAL_SERVER_ERROR
         serializer = self.get_serializer(refund)

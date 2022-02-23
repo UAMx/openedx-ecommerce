@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
+
 
 from django.db import migrations, models
 from oscar.core.loading import get_model
@@ -9,6 +9,7 @@ Option = get_model('catalogue', 'Option')
 
 def create_entitlement_option(apps, schema_editor):
     """ Create catalogue entitlement option. """
+    Option.skip_history_when_saving = True
     course_entitlement_option = Option()
     course_entitlement_option.name = 'Course Entitlement'
     course_entitlement_option.code = 'course_entitlement'
@@ -18,6 +19,7 @@ def create_entitlement_option(apps, schema_editor):
 
 def remove_entitlement_option(apps, schema_editor):
     """ Remove course entitlement option """
+    Option.skip_history_when_saving = True
     course_entitlement_option = Option.objects.get(code='course_entitlement')
     course_entitlement_option.delete()
 

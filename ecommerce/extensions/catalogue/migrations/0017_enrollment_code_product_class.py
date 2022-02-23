@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
+
 
 from django.db import migrations
 from oscar.core.loading import get_model
@@ -14,33 +14,39 @@ ProductClass = get_model('catalogue', 'ProductClass')
 
 def create_enrollment_code_product_class(apps, schema_editor):
     """Create an Enrollment code product class and switch to turn automatic creation on."""
+    for klass in (Category, ProductAttribute, ProductClass):
+        klass.skip_history_when_saving = True
 
-    enrollment_code = ProductClass.objects.create(
+    enrollment_code = ProductClass(
         track_stock=False,
         requires_shipping=False,
         name=ENROLLMENT_CODE_PRODUCT_CLASS_NAME,
         slug=slugify(ENROLLMENT_CODE_PRODUCT_CLASS_NAME),
     )
+    enrollment_code.save()
 
-    ProductAttribute.objects.create(
+    pa1 = ProductAttribute(
         product_class=enrollment_code,
         name='Course Key',
         code='course_key',
         type='text',
         required=True
     )
+    pa1.save()
 
-    ProductAttribute.objects.create(
+    pa2 = ProductAttribute(
         product_class=enrollment_code,
         name='Seat Type',
         code='seat_type',
         type='text',
         required=True
     )
+    pa2.save()
 
 
 def remove_enrollment_code_product_class(apps, schema_editor):
     """Remove the Enrollment code product class and the waffle switch."""
+    ProductClass.skip_history_when_saving = True
     ProductClass.objects.filter(name=ENROLLMENT_CODE_PRODUCT_CLASS_NAME).delete()
 
 

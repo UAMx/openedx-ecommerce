@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
+
+
 import datetime
 import urllib
+from decimal import Decimal
 
 import ddt
 import httpretty
 import mock
 import pytz
 from django.conf import settings
+from django.http import HttpResponseRedirect
 from django.urls import reverse
 from django.utils.timezone import now
 from factory.fuzzy import FuzzyText
@@ -21,10 +25,12 @@ from ecommerce.enterprise.utils import (
     get_enterprise_course_consent_url,
     get_enterprise_customer_data_sharing_consent_token
 )
+from ecommerce.extensions.api.serializers import CouponCodeAssignmentSerializer
 from ecommerce.extensions.catalogue.tests.mixins import DiscoveryTestMixin
 from ecommerce.extensions.checkout.mixins import EdxOrderPlacementMixin
 from ecommerce.extensions.checkout.utils import get_receipt_page_url
 from ecommerce.extensions.order.utils import UserAlreadyPlacedOrder
+from ecommerce.extensions.payment.models import EnterpriseContractMetadata
 from ecommerce.extensions.test.factories import prepare_voucher
 from ecommerce.tests.mixins import ApiMockMixin, LmsApiMockMixin
 from ecommerce.tests.testcases import TestCase
@@ -36,6 +42,7 @@ Catalog = get_model('catalogue', 'Catalog')
 Course = get_model('courses', 'Course')
 Product = get_model('catalogue', 'Product')
 Order = get_model('order', 'Order')
+OrderLine = get_model('order', 'Line')
 OrderLineVouchers = get_model('voucher', 'OrderLineVouchers')
 StockRecord = get_model('partner', 'StockRecord')
 Voucher = get_model('voucher', 'Voucher')
@@ -44,11 +51,12 @@ VoucherApplication = get_model('voucher', 'VoucherApplication')
 CONTENT_TYPE = 'application/json'
 COUPON_CODE = 'COUPONTEST'
 ENTERPRISE_CUSTOMER = 'cf246b88-d5f6-4908-a522-fc307e0b0c59'
+ENTERPRISE_CUSTOMER_CATALOG = 'abc18838-adcb-41d5-abec-b28be5bfcc13'
 
 
 def format_url(base='', path='', params=None):
     if params:
-        return '{base}{path}?{params}'.format(base=base, path=path, params=urllib.urlencode(params))
+        return '{base}{path}?{params}'.format(base=base, path=path, params=urllib.parse.urlencode(params))
     return '{base}{path}'.format(base=base, path=path)
 
 
@@ -79,64 +87,74 @@ class VoucherIsValidTests(DiscoveryTestMixin, TestCase):
     def test_valid_voucher(self):
         """ Verify voucher_is_valid() assess that the voucher is valid. """
         voucher, product = prepare_voucher()
-        valid, msg = voucher_is_valid(voucher=voucher, products=[product], request=self.request)
+        valid, msg, hide_error_message = voucher_is_valid(voucher=voucher, products=[product], request=self.request)
 
         self.assertTrue(valid)
-        self.assertEquals(msg, '')
+        self.assertEqual(msg, '')
+        self.assertEqual(hide_error_message, None)
 
     def test_no_voucher(self):
         """ Verify voucher_is_valid() assess that the voucher is invalid. """
-        valid, msg = voucher_is_valid(voucher=None, products=None, request=None)
+        valid, msg, hide_error_message = voucher_is_valid(voucher=None, products=None, request=None)
         self.assertFalse(valid)
         self.assertEqual(msg, 'Coupon does not exist.')
+        self.assertFalse(hide_error_message)
 
     def test_expired_voucher(self):
         """ Verify voucher_is_valid() assess that the voucher has expired. """
         start_datetime = now() - datetime.timedelta(days=20)
         end_datetime = now() - datetime.timedelta(days=10)
         voucher, product = prepare_voucher(start_datetime=start_datetime, end_datetime=end_datetime)
-        valid, msg = voucher_is_valid(voucher=voucher, products=[product], request=None)
+        valid, msg, hide_error_message = voucher_is_valid(voucher=voucher, products=[product], request=None)
         self.assertFalse(valid)
         self.assertEqual(msg, 'This coupon code has expired.')
+        self.assertTrue(hide_error_message)
 
     def test_future_voucher(self):
         """ Verify voucher_is_valid() assess that the voucher has not started yet. """
         start_datetime = now() + datetime.timedelta(days=10)
         end_datetime = now() + datetime.timedelta(days=20)
         voucher, product = prepare_voucher(start_datetime=start_datetime, end_datetime=end_datetime)
-        valid, msg = voucher_is_valid(voucher=voucher, products=[product], request=None)
+        valid, msg, hide_error_message = voucher_is_valid(voucher=voucher, products=[product], request=None)
         self.assertFalse(valid)
         self.assertEqual(msg, 'This coupon code is not yet valid.')
+        self.assertFalse(hide_error_message)
 
     def test_voucher_unavailable_to_buy(self):
-        """ Verify that False is returned for unavialable products. """
+        """ Verify that False is returned for unavailable products. """
         voucher, product = prepare_voucher()
         product.expires = pytz.utc.localize(datetime.datetime.min)
-        valid, __ = voucher_is_valid(voucher=voucher, products=[product], request=self.request)
+        valid, __, hide_error_message = voucher_is_valid(voucher=voucher, products=[product], request=self.request)
         self.assertFalse(valid)
+        self.assertFalse(hide_error_message)
 
     def test_omitting_unavailable_voucher(self):
         """ Verify if there are more than one product, that availability check is omitted. """
         voucher, product = prepare_voucher()
         product.expires = pytz.utc.localize(datetime.datetime.min)
         __, seat = self.create_course_and_seat()
-        valid, __ = voucher_is_valid(voucher=voucher, products=[product, seat], request=self.request)
+        valid, __, hide_error_message = voucher_is_valid(
+            voucher=voucher, products=[product, seat], request=self.request
+        )
         self.assertTrue(valid)
+        self.assertFalse(hide_error_message)
 
     def test_once_per_customer_voucher(self):
         """ Verify the coupon is valid for anonymous users. """
         voucher, product = prepare_voucher(usage=Voucher.ONCE_PER_CUSTOMER)
-        valid, msg = voucher_is_valid(voucher=voucher, products=[product], request=self.request)
+        valid, msg, hide_error_message = voucher_is_valid(voucher=voucher, products=[product], request=self.request)
         self.assertTrue(valid)
         self.assertEqual(msg, '')
+        self.assertFalse(hide_error_message)
 
     def assert_error_messages(self, voucher, product, user, error_msg):
         """ Assert the proper error message is returned. """
         voucher.offers.first().record_usage(discount={'freq': 1, 'discount': 1})
         self.request.user = user
-        valid, msg = voucher_is_valid(voucher=voucher, products=[product], request=self.request)
+        valid, msg, hide_error_message = voucher_is_valid(voucher=voucher, products=[product], request=self.request)
         self.assertFalse(valid)
         self.assertEqual(msg, error_msg)
+        self.assertFalse(hide_error_message)
 
     def test_usage_exceeded_coupon(self):
         """ Verify voucher_is_valid() assess that the voucher exceeded it's usage limit. """
@@ -180,7 +198,7 @@ class CouponOfferViewTests(ApiMockMixin, CouponMixin, DiscoveryTestMixin, Enterp
 
     def test_expired_voucher(self):
         """ Verify proper response is returned for expired vouchers. """
-        code = FuzzyText().fuzz()
+        code = FuzzyText().fuzz().upper()
         start_datetime = now() - datetime.timedelta(days=20)
         end_datetime = now() - datetime.timedelta(days=10)
         prepare_voucher(code=code, start_datetime=start_datetime, end_datetime=end_datetime)
@@ -191,7 +209,7 @@ class CouponOfferViewTests(ApiMockMixin, CouponMixin, DiscoveryTestMixin, Enterp
 
     def test_no_product(self):
         """ Verify an error is returned for voucher with no product. """
-        code = FuzzyText().fuzz()
+        code = FuzzyText().fuzz().upper()
         no_product_range = RangeFactory()
         prepare_voucher(code=code, _range=no_product_range)
         url = format_url(path=self.path, params={'code': code})
@@ -226,9 +244,7 @@ class CouponOfferViewTests(ApiMockMixin, CouponMixin, DiscoveryTestMixin, Enterp
         self.client.logout()
         url = self.prepare_url_for_credit_seat()
         response = self.client.get(url)
-
-        testserver_login_url = self.get_full_url(reverse('login'))
-        expected_url = '{path}?next={next}'.format(path=testserver_login_url, next=urllib.quote(url))
+        expected_url = '{path}?next={next}'.format(path=reverse('login'), next=urllib.parse.quote(url))
         self.assertRedirects(response, expected_url, target_status_code=302)
 
     def test_credit_seat_response(self):
@@ -333,8 +349,12 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
             code=COUPON_CODE,
             email_domains=None,
             enterprise_customer=None,
+            enterprise_customer_catalog=None,
             course_id=None,
-            catalog=None
+            catalog=None,
+            contract_discount_value=None,
+            contract_discount_type=EnterpriseContractMetadata.PERCENTAGE,
+            prepaid_invoice_amount=None,
     ):
         """ Creates coupon and returns code. """
         coupon = self.create_coupon(
@@ -342,13 +362,21 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
             catalog=catalog,
             code=code,
             email_domains=email_domains,
-            enterprise_customer=enterprise_customer
+            enterprise_customer=enterprise_customer,
+            enterprise_customer_catalog=enterprise_customer_catalog,
         )
         coupon.course_id = course_id
+        if contract_discount_value is not None:
+            ecm = EnterpriseContractMetadata.objects.create(
+                discount_type=contract_discount_type,
+                discount_value=contract_discount_value,
+                amount_paid=prepaid_invoice_amount,
+            )
+            coupon.attr.enterprise_contract_metadata = ecm
         coupon.save()
         coupon_code = coupon.attr.coupon_vouchers.vouchers.first().code
         self.assertEqual(Voucher.objects.filter(code=coupon_code).count(), 1)
-        return coupon_code
+        return coupon_code, coupon
 
     def redeem_coupon(self, code=COUPON_CODE, consent_token=None):
         self.request.user = self.user
@@ -359,7 +387,13 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
 
         order = Order.objects.first()
         receipt_page_url = get_receipt_page_url(self.site.siteconfiguration)
-        expected_url = format_url(base=receipt_page_url, params={'order_number': order.number})
+        expected_url = format_url(
+            base=receipt_page_url,
+            params={
+                'order_number': order.number,
+                'disable_back_button': 1,
+            },
+        )
 
         self.assertRedirects(response, expected_url, status_code=302, fetch_redirect_response=False)
 
@@ -391,7 +425,7 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
 
     def test_invalid_voucher_code(self):
         """ Verify an error is returned when voucher does not exist. """
-        code = FuzzyText().fuzz()
+        code = FuzzyText().fuzz().upper()
         url = format_url(base=self.redeem_url, params={'code': code, 'sku': self.stock_record.partner_sku})
         response = self.client.get(url)
         msg = 'No voucher found with code {code}'.format(code=code)
@@ -408,7 +442,7 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
         """ Verify an error is returned for expired coupon. """
         start_datetime = now() - datetime.timedelta(days=20)
         end_datetime = now() - datetime.timedelta(days=10)
-        code = FuzzyText().fuzz()
+        code = FuzzyText().fuzz().upper()
         __, product = prepare_voucher(code=code, start_datetime=start_datetime, end_datetime=end_datetime)
 
         url = format_url(base=self.redeem_url, params={
@@ -419,6 +453,30 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
         self.assertEqual(response.context['error'], 'This coupon code has expired.')
 
     @httpretty.activate
+    def test_invalid_entitlement_course(self):
+        """ Verify an error is returned when you apply enterprise coupon on entitled product. """
+        entitle_product = ProductFactory(
+            product_class=self.entitlement_product_class, stockrecords__partner=self.partner,
+            stockrecords__price_currency='USD', categories=[]
+        )
+        self.catalog.stock_records.add(StockRecord.objects.get(product=entitle_product))
+        code, _ = self.prepare_enterprise_data(catalog=self.catalog)
+
+        response = self.client.get(
+            format_url(
+                base=self.redeem_url, params={
+                    'code': code,
+                    'sku': StockRecord.objects.get(product=entitle_product).partner_sku
+                }
+            )
+        )
+        self.assertEqual(
+            response.context['error'],
+            'This coupon is not valid for purchasing a program. Try using this on an individual course in the program. '
+            'If you need assistance, contact edX support.'
+        )
+
+    @httpretty.activate
     def test_basket_redirect_discount_code(self):
         """ Verify the view redirects to the basket view when a discount code is provided. """
         self.mock_course_api_response(course=self.course)
@@ -426,13 +484,12 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
         self.mock_access_token_response()
 
         self.create_coupon(catalog=self.catalog, code=COUPON_CODE, benefit_value=5)
-        expected_url = self.get_full_url(path=reverse('basket:summary'))
-        self.assert_redemption_page_redirects(expected_url)
+        self.assert_redemption_page_redirects(self.get_coupon_redeem_success_expected_redirect_url())
 
     @httpretty.activate
     def test_basket_redirect_enrollment_code(self):
         """ Verify the view redirects to the receipt page when an enrollment code is provided. """
-        code = self.create_coupon_and_get_code(benefit_value=100, code='', catalog=self.catalog)
+        code, _ = self.create_coupon_and_get_code(benefit_value=100, code='', catalog=self.catalog)
         self.mock_account_api(self.request, self.user.username, data={'is_active': True})
         self.mock_access_token_response()
 
@@ -442,7 +499,7 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
     @mock.patch.object(EdxOrderPlacementMixin, 'place_free_order')
     def test_basket_redirect_enrollment_code_error(self, place_free_order):
         """ Verify the view redirects to checkout error page when an order hasn't completed. """
-        code = self.create_coupon_and_get_code(benefit_value=100, code='', catalog=self.catalog)
+        code, _ = self.create_coupon_and_get_code(benefit_value=100, code='', catalog=self.catalog)
         self.mock_account_api(self.request, self.user.username, data={'is_active': True})
         self.mock_access_token_response()
         place_free_order.return_value = Exception
@@ -456,14 +513,20 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
             self.assertTrue(mock_logger.called)
 
     def prepare_enterprise_data(self, benefit_value=100, consent_enabled=True, consent_provided=False, course_id=None,
-                                catalog=None):
+                                catalog=None, enterprise_customer_catalog=None, contract_discount_value=None,
+                                contract_discount_type=EnterpriseContractMetadata.PERCENTAGE,
+                                prepaid_invoice_amount=None):
         """Creates an enterprise coupon and mocks enterprise endpoints."""
-        code = self.create_coupon_and_get_code(
+        code, coupon = self.create_coupon_and_get_code(
             benefit_value=benefit_value,
             code='',
             enterprise_customer=ENTERPRISE_CUSTOMER,
             course_id=course_id,
-            catalog=catalog
+            catalog=catalog,
+            enterprise_customer_catalog=enterprise_customer_catalog,
+            contract_discount_type=contract_discount_type,
+            contract_discount_value=contract_discount_value,
+            prepaid_invoice_amount=prepaid_invoice_amount,
         )
         self.request.user = self.user
         self.mock_consent_response(
@@ -477,12 +540,12 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
         self.mock_account_api(self.request, self.user.username, data={'is_active': True})
         self.mock_access_token_response()
         self.mock_specific_enterprise_customer_api(uuid=ENTERPRISE_CUSTOMER, consent_enabled=consent_enabled)
-        return code
+        return code, coupon
 
     @httpretty.activate
     def test_enterprise_customer_redirect_no_consent(self):
         """ Verify the view redirects to LMS when an enrollment code is provided. """
-        code = self.prepare_enterprise_data(catalog=self.catalog)
+        code, _ = self.prepare_enterprise_data(catalog=self.catalog)
         consent_token = get_enterprise_customer_data_sharing_consent_token(
             self.request.user.access_token,
             self.course.id,
@@ -504,7 +567,7 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
     @httpretty.activate
     def test_enterprise_customer_invalid_consent_token(self):
         """ Verify that the view renders an error when the consent token doesn't match. """
-        code = self.prepare_enterprise_data(catalog=self.catalog)
+        code, _ = self.prepare_enterprise_data(catalog=self.catalog)
         self.request.user = self.user
         self.mock_account_api(self.request, self.user.username, data={'is_active': True})
         self.mock_access_token_response()
@@ -521,16 +584,76 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
         Verify that a generic error is rendered when the corresponding EnterpriseCustomer doesn't exist
         on the Enterprise service.
         """
-        code = self.prepare_enterprise_data(catalog=self.catalog)
+        code, _ = self.prepare_enterprise_data(catalog=self.catalog)
         self.mock_enterprise_customer_api_not_found(ENTERPRISE_CUSTOMER)
         self.mock_enterprise_learner_api_for_learner_with_no_enterprise()
         response = self.client.get(self.redeem_url_with_params(code=code))
         self.assertEqual(response.context['error'], 'Couldn\'t find a matching Enterprise Customer for this coupon.')
 
     @httpretty.activate
+    def test_enterprise_contract_metadata_create_on_coupon_redemption(self):
+        """
+        Verify an orderline is updated with calculated enterprise discount data
+        if a product is fulfilled with a coupon for an enterprise customer and
+        that coupon has `enterprise_contract_metadata` associated with it.
+        """
+        code, _ = self.prepare_enterprise_data(
+            enterprise_customer_catalog=ENTERPRISE_CUSTOMER_CATALOG,
+            contract_discount_type=EnterpriseContractMetadata.FIXED,
+            contract_discount_value=Decimal('1337.00'),
+            prepaid_invoice_amount=Decimal('2000.00'),
+        )
+        self.mock_assignable_enterprise_condition_calls(ENTERPRISE_CUSTOMER_CATALOG)
+        self.mock_enterprise_learner_api_for_learner_with_no_enterprise()
+        self.mock_enterprise_learner_post_api()
+
+        consent_token = get_enterprise_customer_data_sharing_consent_token(
+            self.request.user.access_token,
+            self.course.id,
+            ENTERPRISE_CUSTOMER
+        )
+
+        self.request.user = self.user
+        self.client.get(self.redeem_url_with_params(code=code, consent_token=consent_token))
+
+        # Assert our orderline has attributes updated with some decimal value
+        orderline = Order.objects.first().lines.last()
+        self.assertIsInstance(orderline.effective_contract_discount_percentage, Decimal)
+        self.assertIsInstance(orderline.effective_contract_discounted_price, Decimal)
+
+    @httpretty.activate
+    def test_enterprise_contract_metadata_not_created(self):
+        """
+        Verify an orderline is NOT updated with calculated enterprise discount data
+        if a product is fulfilled with a coupon for an enterprise customer but
+        that coupon has NO `enterprise_contract_metadata` associated with it.
+        """
+        code, _ = self.prepare_enterprise_data(
+            enterprise_customer_catalog=ENTERPRISE_CUSTOMER_CATALOG,
+        )
+        self.mock_assignable_enterprise_condition_calls(ENTERPRISE_CUSTOMER_CATALOG)
+        self.mock_enterprise_learner_api_for_learner_with_no_enterprise()
+        self.mock_enterprise_learner_post_api()
+
+        consent_token = get_enterprise_customer_data_sharing_consent_token(
+            self.request.user.access_token,
+            self.course.id,
+            ENTERPRISE_CUSTOMER
+        )
+
+        self.request.user = self.user
+        self.client.get(self.redeem_url_with_params(code=code, consent_token=consent_token))
+
+        # Assert our orderline has nothing set for enterprise discount fields
+        orderline = Order.objects.first().lines.last()
+        assert orderline.effective_contract_discount_percentage is None
+        assert orderline.effective_contract_discounted_price is None
+
+    @httpretty.activate
     def test_enterprise_customer_successful_redemption(self):
         """ Verify the view redirects to LMS when valid consent is provided. """
-        code = self.prepare_enterprise_data(catalog=self.catalog)
+        code, _ = self.prepare_enterprise_data(enterprise_customer_catalog=ENTERPRISE_CUSTOMER_CATALOG)
+        self.mock_assignable_enterprise_condition_calls(ENTERPRISE_CUSTOMER_CATALOG)
         self.mock_enterprise_learner_api_for_learner_with_no_enterprise()
         self.mock_enterprise_learner_post_api()
 
@@ -551,11 +674,15 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
     @httpretty.activate
     def test_enterprise_customer_successful_redemption_message(self):
         """ Verify the info message appears on successful redemption. """
-        expected_message = '<i class="fa fa-info-circle"></i> A discount has been applied, courtesy of BigEnterprise.'
+        expected_message = 'A discount has been applied, courtesy of BigEnterprise.'
 
         # Setting benefit value to a low amount to ensure the basket is not free,
         # and calls to the checkout page do not redirect away from the checkout page.
-        code = self.prepare_enterprise_data(benefit_value=5, consent_enabled=False, catalog=self.catalog)
+        code, _ = self.prepare_enterprise_data(
+            benefit_value=5, consent_enabled=False, catalog=self.catalog,
+            enterprise_customer_catalog=ENTERPRISE_CUSTOMER_CATALOG
+        )
+        self.mock_assignable_enterprise_condition_calls(ENTERPRISE_CUSTOMER_CATALOG)
 
         self.mock_enterprise_learner_api_for_learner_with_no_enterprise()
         self.mock_enterprise_learner_post_api()
@@ -563,7 +690,7 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
         response = self.client.get(self.redeem_url_with_params(code=code), follow=True)
         messages = []
         messages += response.context['messages']
-        self.assertEqual(messages[0].tags, 'safe info')
+        self.assertEqual(messages[0].tags, 'info')
         self.assertEqual(messages[0].message, expected_message)
 
     @httpretty.activate
@@ -576,7 +703,7 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
 
         # Setting benefit value to a low amount to ensure the basket is not free,
         # and calls to the checkout page do not redirect away from the checkout page.
-        code = self.prepare_enterprise_data(benefit_value=5, consent_enabled=False, course_id=course.id)
+        code, _ = self.prepare_enterprise_data(benefit_value=5, consent_enabled=False, course_id=course.id)
 
         self.mock_enterprise_learner_api_for_learner_with_no_enterprise()
         self.mock_enterprise_learner_post_api()
@@ -595,9 +722,43 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
         self.assertEqual(messages[0].message, expected_message)
 
     @httpretty.activate
+    def test_enterprise_customer_coupon_redemption_for_no_offer_assignment(self):
+        """
+        Verify the warning message appears on redemption if coupon does not have any
+        offer assignments for the user.
+        """
+        expected_message = (
+            'This code is not valid with your email. '
+            'Please login with the correct email assigned '
+            'to the code or contact your Learning Manager '
+            'for additional questions.'
+        )
+
+        code, coupon = self.prepare_enterprise_data(
+            benefit_value=5, consent_enabled=False, catalog=self.catalog,
+            enterprise_customer_catalog=ENTERPRISE_CUSTOMER_CATALOG
+        )
+        self.mock_assignable_enterprise_condition_calls(ENTERPRISE_CUSTOMER_CATALOG)
+        self.mock_enterprise_learner_api_for_learner_with_no_enterprise()
+        self.mock_enterprise_learner_post_api()
+        self.mock_course_run_detail_endpoint(self.course, discovery_api_url=self.site_configuration.discovery_api_url)
+
+        data = {'codes': [code], 'emails': ['foo@bar.org']}
+        serializer = CouponCodeAssignmentSerializer(data=data, context={'coupon': coupon})
+        if serializer.is_valid():
+            serializer.save()
+
+        response = self.client.get(self.redeem_url_with_params(code=code), follow=True)
+
+        messages = []
+        messages += response.context['messages']
+        self.assertEqual(messages[0].tags, 'warning')
+        self.assertEqual(messages[0].message, expected_message)
+
+    @httpretty.activate
     def test_multiple_vouchers(self):
         """ Verify a redirect to LMS happens when a basket with already existing vouchers is used. """
-        code = self.create_coupon_and_get_code(benefit_value=100, code='', catalog=self.catalog)
+        code, _ = self.create_coupon_and_get_code(benefit_value=100, code='', catalog=self.catalog)
         basket = Basket.get_basket(self.user, self.site)
         basket.vouchers.add(Voucher.objects.get(code=code))
 
@@ -625,6 +786,13 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
         msg = 'You are not eligible to use this coupon.'
         self.assertEqual(response.context['error'], msg)
 
+    def assert_redirected_to_email_confirmation(self, response):
+        expected_redirect_url = '/offers/email_confirmation/?{}'.format(
+            urllib.parse.urlencode({'course_id': self.course.id})
+        )
+        self.assertIsInstance(response, HttpResponseRedirect)
+        self.assertIn(expected_redirect_url, response.url)
+
     @httpretty.activate
     def test_inactive_user_rejection(self):
         """ Verify that a user who hasn't activated the account is rejected. """
@@ -633,11 +801,10 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
         self.mock_access_token_response()
 
         response = self.client.get(self.redeem_url_with_params())
-        self.assertEqual(response.context['course_name'], self.course.name)
-        self.assertEqual(response.context['user_email'], self.user.email)
+        self.assert_redirected_to_email_confirmation(response)
 
     @httpretty.activate
-    def test_active_user_requirement_disabled(self):
+    def test_inactive_user_requirement_disabled(self):
         """
         Verify that a user who hasn't activated their account is redirected to the basket view
         when the account activation requirement has been disabled.
@@ -648,11 +815,10 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
         self.mock_access_token_response()
 
         self.create_coupon(catalog=self.catalog, code=COUPON_CODE, benefit_value=5)
-        expected_url = self.get_full_url(path=reverse('basket:summary'))
-        self.assert_redemption_page_redirects(expected_url)
+        self.assert_redemption_page_redirects(self.get_coupon_redeem_success_expected_redirect_url())
 
     @httpretty.activate
-    def test_active_user_email_domain_restricted_coupon_redemption(self):
+    def test_inactive_user_email_domain_restricted_coupon_redemption(self):
         """
         Verify that a user must activate their account before being allowed
         to redeem an email domain-restricted coupon.
@@ -663,9 +829,10 @@ class CouponRedeemViewTests(CouponMixin, DiscoveryTestMixin, LmsApiMockMixin, En
         self.create_coupon(catalog=self.catalog, code=COUPON_CODE, benefit_value=5, email_domains=email_domain)
 
         response = self.client.get(self.redeem_url_with_params())
-        self.assertIn('edx/email_confirmation_required.html', [t.name for t in response.templates])
-        self.assertEqual(response.context['course_name'], self.course.name)
-        self.assertEqual(response.context['user_email'], self.user.email)
+        self.assert_redirected_to_email_confirmation(response)
+
+    def get_coupon_redeem_success_expected_redirect_url(self):
+        return self.get_full_url(path=reverse('basket:summary')) + '?coupon_redeem_redirect=1'
 
 
 @ddt.ddt
@@ -701,7 +868,7 @@ class EnrollmentCodeCsvViewTests(TestCase):
         voucher = VoucherFactory()
         order = OrderFactory(user=self.user)
         product = ProductFactory(title=product_title, categories=[])
-        line = OrderLineFactory(order=order, product=product)
+        line = OrderLineFactory(order=order, product=product, partner_sku='test_sku')
         order_line_vouchers = OrderLineVouchers.objects.create(line=line)
         order_line_vouchers.vouchers.add(voucher)
 

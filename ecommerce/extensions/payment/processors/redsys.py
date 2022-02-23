@@ -11,7 +11,7 @@ import hmac
 import hashlib
 import time
 from decimal import Decimal
-from urlparse import urljoin
+from urllib.parse import urljoin
 from django import forms
 
 import waffle
@@ -70,7 +70,6 @@ class Redsys(BasePaymentProcessor):
 
     @property
     def receipt_page_url(self):
-        logger.info(str(get_ecommerce_url())) 
         return urljoin(get_ecommerce_url(), reverse('redsys:execute'))
         #return get_ecommerce_url(self.configuration.get('urlok', '/redsys/execute/'))
 

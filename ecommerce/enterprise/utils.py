@@ -1,23 +1,29 @@
 """
 Helper methods for enterprise app.
 """
+
+
 import hashlib
 import hmac
 import logging
 from collections import OrderedDict
-from urllib import urlencode
+from functools import reduce  # pylint: disable=redefined-builtin
+from urllib.parse import urlencode, urlparse
 
-import waffle
+import crum
 from django.conf import settings
 from django.urls import reverse
 from django.utils.translation import ugettext as _
 from edx_django_utils.cache import TieredCache
 from edx_rest_api_client.client import EdxRestApiClient
+from edx_rest_framework_extensions.auth.jwt.cookies import get_decoded_jwt
 from oscar.core.loading import get_model
-from requests.exceptions import ConnectionError, Timeout
+from requests.exceptions import ConnectionError as ReqConnectionError
+from requests.exceptions import Timeout
 from slumber.exceptions import SlumberHttpBaseException
 
-from ecommerce.core.utils import deprecated_traverse_pagination
+from ecommerce.core.constants import SYSTEM_ENTERPRISE_LEARNER_ROLE
+from ecommerce.core.url_utils import absolute_url, get_lms_dashboard_url
 from ecommerce.enterprise.exceptions import EnterpriseDoesNotExist
 from ecommerce.extensions.offer.models import OFFER_PRIORITY_ENTERPRISE
 
@@ -27,22 +33,15 @@ Voucher = get_model('voucher', 'Voucher')
 CONSENT_FAILED_PARAM = 'consent_failed'
 log = logging.getLogger(__name__)
 
-
-def is_enterprise_feature_enabled():
-    """
-    Returns boolean indicating whether enterprise feature is enabled or
-    disabled.
-
-    Example:
-        >> is_enterprise_feature_enabled()
-        True
-
-    Returns:
-         (bool): True if enterprise feature is enabled else False
-
-    """
-    is_enterprise_enabled = waffle.switch_is_active(settings.ENABLE_ENTERPRISE_ON_RUNTIME_SWITCH)
-    return is_enterprise_enabled
+CUSTOMER_CATALOGS_DEFAULT_RESPONSE = {
+    'count': 0,
+    'num_pages': 0,
+    'current_page': 0,
+    'start': 0,
+    'next': None,
+    'previous': None,
+    'results': [],
+}
 
 
 def get_enterprise_api_client(site):
@@ -60,13 +59,13 @@ def get_enterprise_customer(site, uuid):
     Return a single enterprise customer
     """
     resource = 'enterprise-customer'
-    cache_key = '{site_domain}_{partner_code}_{resource}_{enterprise_uuid}'.format(
+    cache_key = u'{site_domain}_{partner_code}_{resource}_{enterprise_uuid}'.format(
         site_domain=site.domain,
         partner_code=site.siteconfiguration.partner.short_code,
         resource=resource,
         enterprise_uuid=uuid,
     )
-    cache_key = hashlib.md5(cache_key).hexdigest()
+    cache_key = hashlib.md5(cache_key.encode('utf-8')).hexdigest()
     cached_response = TieredCache.get_cached_response(cache_key)
     if cached_response.is_found:
         return cached_response.value
@@ -77,7 +76,7 @@ def get_enterprise_customer(site, uuid):
 
     try:
         response = client.get()
-    except (ConnectionError, SlumberHttpBaseException, Timeout):
+    except (ReqConnectionError, SlumberHttpBaseException, Timeout):
         return None
 
     enterprise_customer_response = {
@@ -98,21 +97,120 @@ def get_enterprise_customer(site, uuid):
     return enterprise_customer_response
 
 
-def get_enterprise_customers(site):
-    resource = 'enterprise-customer'
+def get_enterprise_customers(request):
+    client = get_enterprise_api_client(request.site)
+    enterprise_customer_client = getattr(client, 'enterprise-customer')
+    response = enterprise_customer_client.basic_list.get(**request.GET)
+    return response
+
+
+def update_paginated_response(endpoint_request_url, data):
+    """
+    Update next and previous links with their url replaced by an ecommerce endpoint url.
+
+    Arguments:
+        request_url (str): endpoint request url.
+        data (dict): Dictionary containing catalog courses.
+
+    Returns:
+        dict: response data
+
+    Below are sample input and output
+
+    INPUT: {
+        'next': http://lms.server/enterprise/api/v1/enterprise_catalogs/?enterprise_customer=6ae013d4
+    }
+
+    OUTPUT: {
+        next: http://ecom.server/api/v2/enterprise/customer_catalogs?enterprise_customer=6ae013d4
+    }
+    """
+    next_page = None
+    previous_page = None
+
+    if data.get('next'):
+        next_page = "{endpoint_request_url}?{query_parameters}".format(
+            endpoint_request_url=endpoint_request_url,
+            query_parameters=urlparse(data['next']).query,
+        )
+        next_page = next_page.rstrip('?')
+
+    if data.get('previous'):
+        previous_page = "{endpoint_request_url}?{query_parameters}".format(
+            endpoint_request_url=endpoint_request_url,
+            query_parameters=urlparse(data['previous'] or "").query,
+        )
+        previous_page = previous_page.rstrip('?')
+
+    return dict(data, next=next_page, previous=previous_page)
+
+
+def get_enterprise_customer_catalogs(site, endpoint_request_url, enterprise_customer_uuid, page):
+    """
+    Get catalogs associated with an Enterprise Customer.
+
+    Args:
+        site (Site): The site which is handling the current request
+        enterprise_customer_uuid (str): The uuid of the Enterprise Customer
+
+    Returns:
+        dict: Information associated with the Enterprise Catalog.
+
+    Response will look like
+
+        {
+            'count': 2,
+            'num_pages': 1,
+            'current_page': 1,
+            'results': [
+                {
+                    'enterprise_customer': '6ae013d4-c5c4-474d-8da9-0e559b2448e2',
+                    'uuid': '869d26dd-2c44-487b-9b6a-24eee973f9a4',
+                    'title': 'batman_catalog'
+                },
+                {
+                    'enterprise_customer': '6ae013d4-c5c4-474d-8da9-0e559b2448e2',
+                    'uuid': '1a61de70-f8e8-4e8c-a76e-01783a930ae6',
+                    'title': 'new catalog'
+                }
+            ],
+            'next': None,
+            'start': 0,
+            'previous': None
+        }
+    """
+    resource = 'enterprise_catalogs'
+    partner_code = site.siteconfiguration.partner.short_code
+    cache_key = u'{site_domain}_{partner_code}_{resource}_{uuid}_{page}'.format(
+        site_domain=site.domain,
+        partner_code=partner_code,
+        resource=resource,
+        uuid=enterprise_customer_uuid,
+        page=page,
+    )
+    cache_key = hashlib.md5(cache_key.encode('utf-8')).hexdigest()
+
+    cached_response = TieredCache.get_cached_response(cache_key)
+    if cached_response.is_found:
+        return cached_response.value
+
     client = get_enterprise_api_client(site)
     endpoint = getattr(client, resource)
-    response = endpoint.get()
-    return sorted(
-        [
-            {
-                'name': each['name'],
-                'id': each['uuid'],
-            }
-            for each in deprecated_traverse_pagination(response, endpoint)
-        ],
-        key=lambda k: k['name'].lower()
-    )
+
+    try:
+        response = endpoint.get(enterprise_customer=enterprise_customer_uuid, page=page)
+        response = update_paginated_response(endpoint_request_url, response)
+    except (ReqConnectionError, SlumberHttpBaseException, Timeout) as exc:
+        logging.exception(
+            'Unable to retrieve catalogs for enterprise customer! customer: %s, Exception: %s',
+            enterprise_customer_uuid,
+            exc
+        )
+        return CUSTOMER_CATALOGS_DEFAULT_RESPONSE
+
+    TieredCache.set_all_tiers(cache_key, response, settings.ENTERPRISE_API_CACHE_TIMEOUT)
+
+    return response
 
 
 def get_enterprise_customer_consent_failed_context_data(request, voucher):
@@ -140,6 +238,7 @@ def get_enterprise_customer_consent_failed_context_data(request, voucher):
         request.site,
         voucher
     )
+
     if not enterprise_customer:
         return {'error': _('There is no Enterprise Customer associated with SKU {sku}.').format(
             sku=consent_failed_sku
@@ -164,7 +263,7 @@ def get_enterprise_customer_consent_failed_context_data(request, voucher):
     }
 
 
-def get_or_create_enterprise_customer_user(site, enterprise_customer_uuid, username):
+def get_or_create_enterprise_customer_user(site, enterprise_customer_uuid, username, active=True):
     """
     Create a new EnterpriseCustomerUser on the enterprise service if one doesn't already exist.
     Return the EnterpriseCustomerUser data.
@@ -172,6 +271,7 @@ def get_or_create_enterprise_customer_user(site, enterprise_customer_uuid, usern
     data = {
         'enterprise_customer': str(enterprise_customer_uuid),
         'username': username,
+        'active': active,
     }
     api_resource_name = 'enterprise-learner'
     api = site.siteconfiguration.enterprise_api_client
@@ -328,11 +428,11 @@ def get_enterprise_customer_data_sharing_consent_token(access_token, course_id, 
     Enterprise Customer combination.
     """
     consent_token_hmac = hmac.new(
-        str(access_token),
-        '{course_id}_{enterprise_customer_uuid}'.format(
+        str(access_token).encode('utf-8'),
+        u'{course_id}_{enterprise_customer_uuid}'.format(
             course_id=course_id,
             enterprise_customer_uuid=enterprise_customer_uuid,
-        ),
+        ).encode('utf-8'),
         digestmod=hashlib.sha256,
     )
     return consent_token_hmac.hexdigest()
@@ -403,7 +503,7 @@ def has_enterprise_offer(basket):
     return False
 
 
-def get_enterprise_catalog(site, enterprise_catalog, limit, page):
+def get_enterprise_catalog(site, enterprise_catalog, limit, page, endpoint_request_url=None):
     """
     Get the EnterpriseCustomerCatalog for a given catalog uuid.
 
@@ -412,6 +512,7 @@ def get_enterprise_catalog(site, enterprise_catalog, limit, page):
         enterprise_catalog (str): The uuid of the Enterprise Catalog
         limit (int): The number of results to return per page.
         page (int): The page number to fetch.
+        endpoint_request_url (str): This is used to replace the lms url with ecommerce url
 
     Returns:
         dict: The result set containing the content objects associated with the Enterprise Catalog.
@@ -419,7 +520,7 @@ def get_enterprise_catalog(site, enterprise_catalog, limit, page):
     """
     resource = 'enterprise_catalogs'
     partner_code = site.siteconfiguration.partner.short_code
-    cache_key = '{site_domain}_{partner_code}_{resource}_{catalog}_{limit}_{page}'.format(
+    cache_key = u'{site_domain}_{partner_code}_{resource}_{catalog}_{limit}_{page}'.format(
         site_domain=site.domain,
         partner_code=partner_code,
         resource=resource,
@@ -427,7 +528,7 @@ def get_enterprise_catalog(site, enterprise_catalog, limit, page):
         limit=limit,
         page=page
     )
-    cache_key = hashlib.md5(cache_key).hexdigest()
+    cache_key = hashlib.md5(cache_key.encode('utf-8')).hexdigest()
 
     cached_response = TieredCache.get_cached_response(cache_key)
     if cached_response.is_found:
@@ -441,6 +542,73 @@ def get_enterprise_catalog(site, enterprise_catalog, limit, page):
         limit=limit,
         page=page,
     )
+
+    if endpoint_request_url:
+        response = update_paginated_response(endpoint_request_url, response)
+
     TieredCache.set_all_tiers(cache_key, response, settings.CATALOG_RESULTS_CACHE_TIMEOUT)
 
     return response
+
+
+def get_enterprise_id_for_current_request_user_from_jwt():
+    request = crum.get_current_request()
+    decoded_jwt = get_decoded_jwt(request)
+    if decoded_jwt:
+        roles_claim = decoded_jwt.get('roles', [])
+        for role_data in roles_claim:
+            role_in_jwt, __, context_in_jwt = role_data.partition(':')
+            if role_in_jwt == SYSTEM_ENTERPRISE_LEARNER_ROLE and context_in_jwt:
+                return context_in_jwt
+
+    return None
+
+
+def get_enterprise_customer_from_enterprise_offer(basket):
+    """
+    Return enterprise customer uuid if the basket has an Enterprise-related offer applied.
+
+    Arguments:
+        basket (Basket): The basket object.
+
+    Returns:
+        boolean: uuid if the basket has an Enterprise-related offer applied, None otherwise.
+    """
+    for offer in basket.offer_discounts:
+        if offer['offer'].priority == OFFER_PRIORITY_ENTERPRISE:
+            return str(offer['offer'].condition.enterprise_customer_uuid)
+    return None
+
+
+def construct_enterprise_course_consent_url(request, course_id, enterprise_customer_uuid):
+    """
+    Construct the URL that should be used for redirecting the user to the Enterprise service for
+    collecting consent.
+    """
+    site = request.site
+    failure_url = '{base}?{params}'.format(
+        base=get_lms_dashboard_url(),
+        params=urlencode({
+            'enterprise_customer': enterprise_customer_uuid,
+            CONSENT_FAILED_PARAM: course_id
+        }),
+    )
+    request_params = {
+        'course_id': course_id,
+        'enterprise_customer_uuid': enterprise_customer_uuid,
+        'next': absolute_url(request, 'checkout:free-checkout'),
+        'failure_url': failure_url,
+    }
+
+    redirect_url = '{base}?{params}'.format(
+        base=site.siteconfiguration.enterprise_grant_data_sharing_url,
+        params=urlencode(request_params)
+    )
+    return redirect_url
+
+
+def convert_comma_separated_string_to_list(comma_separated_string):
+    """
+    Convert the comma separated string to a valid list.
+    """
+    return list(set(item.strip() for item in comma_separated_string.split(",") if item.strip()))

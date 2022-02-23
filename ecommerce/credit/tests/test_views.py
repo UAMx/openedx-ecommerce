@@ -1,7 +1,7 @@
 """
 Tests for the checkout page.
 """
-from __future__ import unicode_literals
+
 
 import json
 from datetime import timedelta
@@ -119,12 +119,12 @@ class CheckoutPageTest(DiscoveryTestMixin, TestCase, JwtMixin):
             u"this course credit."
         )
 
-    def _assert_success_checkout_page(self):
+    def _assert_success_checkout_page(self, sku=None):
         """ Verify that checkout page load successfully, and has necessary context. """
 
         # Create the credit seat
         self.course.create_or_update_seat(
-            'credit', True, self.price, self.provider, credit_hours=self.credit_hours
+            'credit', True, self.price, self.provider, credit_hours=self.credit_hours, sku=sku
         )
 
         self._enable_payment_providers()
@@ -152,6 +152,7 @@ class CheckoutPageTest(DiscoveryTestMixin, TestCase, JwtMixin):
     @httpretty.activate
     def test_get_without_deadline(self):
         """ Verify an error is shown if the user is not eligible for credit. """
+        self.mock_access_token_response()
         self._mock_eligibility_api(body=[])
         self._assert_error_without_deadline()
 
@@ -160,6 +161,7 @@ class CheckoutPageTest(DiscoveryTestMixin, TestCase, JwtMixin):
         """ Verify an error is shown if the Credit API returns an empty list of
         providers.
         """
+        self.mock_access_token_response()
         self._mock_eligibility_api(body=self.eligibilities)
 
         # Create the credit seat
@@ -174,6 +176,7 @@ class CheckoutPageTest(DiscoveryTestMixin, TestCase, JwtMixin):
         """ Verify an error is shown if an exception is raised when requesting
         eligibility information from the Credit API.
         """
+        self.mock_access_token_response()
         self._mock_eligibility_api(body=[], status=500)
         self._assert_error_without_deadline()
 
@@ -187,6 +190,7 @@ class CheckoutPageTest(DiscoveryTestMixin, TestCase, JwtMixin):
         self.course.create_or_update_seat(
             'credit', True, self.price, self.provider, credit_hours=self.credit_hours
         )
+        self.mock_access_token_response()
         self._mock_eligibility_api(body=self.eligibilities)
         self._mock_providers_api(body=[], status=500)
         self._assert_error_without_providers()
@@ -197,14 +201,15 @@ class CheckoutPageTest(DiscoveryTestMixin, TestCase, JwtMixin):
         calls return successfully.
         """
         # Create the credit seat
-        self.course.create_or_update_seat(
+        credit_seat = self.course.create_or_update_seat(
             'credit', True, self.price, self.provider, credit_hours=self.credit_hours
         )
 
+        self.mock_access_token_response()
         self._mock_eligibility_api(body=self.eligibilities)
         self._mock_providers_api(body=self.provider_data)
 
-        self._assert_success_checkout_page()
+        self._assert_success_checkout_page(sku=credit_seat.stockrecords.first().partner_sku)
 
     @httpretty.activate
     def test_get_checkout_page_with_audit_seats(self):
@@ -212,17 +217,18 @@ class CheckoutPageTest(DiscoveryTestMixin, TestCase, JwtMixin):
         calls return successfully.
         """
         # Create the credit seat
-        self.course.create_or_update_seat(
+        credit_seat = self.course.create_or_update_seat(
             'credit', True, self.price, self.provider, credit_hours=self.credit_hours
         )
 
         # Create the audit seat
         self.course.create_or_update_seat('', False, 0)
 
+        self.mock_access_token_response()
         self._mock_eligibility_api(body=self.eligibilities)
         self._mock_providers_api(body=self.provider_data)
 
-        self._assert_success_checkout_page()
+        self._assert_success_checkout_page(sku=credit_seat.stockrecords.first().partner_sku)
 
     @httpretty.activate
     def test_seat_unavailable(self):
@@ -231,6 +237,7 @@ class CheckoutPageTest(DiscoveryTestMixin, TestCase, JwtMixin):
         self.course.create_or_update_seat(
             'credit', True, self.price, self.provider, credit_hours=self.credit_hours, expires=expires
         )
+        self.mock_access_token_response()
         self._mock_eligibility_api(body=self.eligibilities)
 
         response = self.client.get(self.path)
@@ -256,6 +263,7 @@ class CheckoutPageTest(DiscoveryTestMixin, TestCase, JwtMixin):
         )
         new_range = RangeFactory(products=[seat, ])
         prepare_voucher(code=code, _range=new_range, benefit_value=100, benefit_type=benefit_type)
+        self.mock_access_token_response()
         self._mock_eligibility_api(body=self.eligibilities)
         self._mock_providers_api(body=self.provider_data)
 

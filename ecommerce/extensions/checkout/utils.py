@@ -1,53 +1,59 @@
+
+
 import logging
-import urllib
+from urllib import parse
 
 from babel.numbers import format_currency as default_format_currency
 from django.conf import settings
 from django.urls import reverse
 from django.utils.translation import get_language, to_locale
-from edx_rest_api_client.client import EdxRestApiClient
-from requests.exceptions import ConnectionError, Timeout
+from requests.exceptions import ConnectionError as ReqConnectionError
+from requests.exceptions import Timeout
 from slumber.exceptions import SlumberHttpBaseException
 
 logger = logging.getLogger(__name__)
 
 
-def get_credit_provider_details(access_token, credit_provider_id, site_configuration):
+def get_credit_provider_details(credit_provider_id, site_configuration):
     """ Returns the credit provider details from LMS.
 
     Args:
-        access_token (str): JWT access token
         credit_provider_id (str): Identifier for the provider
         site_configuration (SiteConfiguration): Ecommerce Site Configuration
 
     Returns: dict
     """
     try:
-        return EdxRestApiClient(
-            site_configuration.build_lms_url('api/credit/v1/'),
-            oauth_access_token=access_token
-        ).providers(credit_provider_id).get()
-    except (ConnectionError, SlumberHttpBaseException, Timeout):
+        return site_configuration.credit_api_client.providers(credit_provider_id).get()
+    except (ReqConnectionError, SlumberHttpBaseException, Timeout):
         logger.exception('Failed to retrieve credit provider details for provider [%s].', credit_provider_id)
         return None
 
 
-def get_receipt_page_url(site_configuration, order_number=None, override_url=None):
+def get_receipt_page_url(site_configuration, order_number=None, override_url=None, disable_back_button=False):
     """ Returns the receipt page URL.
 
     Args:
         order_number (str): Order number
         site_configuration (SiteConfiguration): Site Configuration containing the flag for enabling Otto receipt page.
         override_url (str): New receipt page to override the default one.
+        disable_back_button (bool): Whether to disable the back button from receipt page. Defaults to false as the
+            receipt page is referenced in emails/etc., and we only want to disable the back button from the receipt
+            page if the user has gone through the payment flow.
 
     Returns:
         str: Receipt page URL.
     """
     if override_url:
         return override_url
-    else:
-        base_url = site_configuration.build_ecommerce_url(reverse('checkout:receipt'))
-        params = urllib.urlencode({'order_number': order_number}) if order_number else ''
+
+    url_params = {}
+    if order_number:
+        url_params['order_number'] = order_number
+    if disable_back_button:
+        url_params['disable_back_button'] = int(disable_back_button)
+    base_url = site_configuration.build_ecommerce_url(reverse('checkout:receipt'))
+    params = parse.urlencode(url_params)
 
     return '{base_url}{params}'.format(
         base_url=base_url,

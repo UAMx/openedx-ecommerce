@@ -1,3 +1,5 @@
+
+
 from django.urls import reverse
 
 from ecommerce.extensions.refund.status import REFUND
@@ -5,7 +7,7 @@ from ecommerce.extensions.refund.tests.factories import RefundFactory
 from ecommerce.tests.testcases import TestCase
 
 
-class RefundViewTestMixin(object):
+class RefundViewTestMixin:
     def setUp(self):
         super(RefundViewTestMixin, self).setUp()
         self.user = self.create_user(is_superuser=True, is_staff=True)
@@ -39,11 +41,8 @@ class RefundViewTestMixin(object):
 
 
 class RefundListViewTests(RefundViewTestMixin, TestCase):
-    path = reverse('dashboard:refunds:list')
+    path = reverse('dashboard:refunds-list')
     username = 'hackerman'
-
-    def setUp(self):
-        super(RefundListViewTests, self).setUp()
 
     def test_filtering(self):
         """ The view should allow filtering by ID, status, and username. """
@@ -88,7 +87,7 @@ class RefundListViewTests(RefundViewTestMixin, TestCase):
         response = self.client.get('{path}?username={username}'.format(
             path=self.path,
             # Cut the configured username in half, then invert the fragment's casing.
-            username=self.username[:len(self.username) / 2].swapcase()
+            username=self.username[:len(self.username) // 2].swapcase()
         ))
         self.assert_successful_response(response, [new_refund])
 
@@ -110,4 +109,4 @@ class RefundDetailViewTests(RefundViewTestMixin, TestCase):
         self.user = self.create_user(is_superuser=True, is_staff=True)
 
         refund = RefundFactory()
-        self.path = reverse('dashboard:refunds:detail', args=[refund.id])
+        self.path = reverse('dashboard:refunds-detail', args=[refund.id])

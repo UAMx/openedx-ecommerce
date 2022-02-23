@@ -1,6 +1,7 @@
-import __builtin__
+
+
 import sys
-from StringIO import StringIO
+from io import StringIO
 
 import ddt
 from mock import patch
@@ -25,12 +26,12 @@ class PromptTests(TestCase):
         """Test wrong user input."""
         out = StringIO()
         sys.stdout = out
-        with patch.object(__builtin__, 'raw_input', side_effect=['wrong', 'no']):
+        with patch('builtins.input', side_effect=['wrong', 'no']):
             query_yes_no(self.CONFIRMATION_PROMPT)
             output = out.getvalue().strip()
-            self.assertIn("Please respond with one of the following (y, yes, n, no)", output)
+            self.assertIn("Please respond with one of the following (n, no, y, yes)", output)
 
-    @patch.object(__builtin__, 'raw_input')
+    @patch('builtins.input')
     @ddt.data(
         ('yes', True, 'no'), ('no', False, 'yes'), ('', True, 'yes'), ('yes', True, None)
     )

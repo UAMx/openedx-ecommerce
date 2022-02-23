@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+
+
 from django import forms
 from django.forms.utils import ErrorList
 from django.utils.translation import ugettext_lazy as _
@@ -22,7 +24,7 @@ class ProgramOfferForm(forms.ModelForm):
         required=True, decimal_places=2, max_digits=12, min_value=0, label=_('Discount Value')
     )
 
-    class Meta(object):
+    class Meta:
         model = ConditionalOffer
         fields = ['program_uuid', 'start_datetime', 'end_datetime', 'benefit_type', 'benefit_value']
         help_texts = {

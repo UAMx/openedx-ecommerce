@@ -1,12 +1,15 @@
 """
 Tests for Management commands of comprehensive theming.
 """
+
+
 from django.conf import settings
 from django.core.management import CommandError, call_command
-from django.test import TestCase, override_settings
+from django.test import override_settings
 from mock import Mock, patch
 from path import Path
 
+from ecommerce.tests.testcases import TestCase
 from ecommerce.theming.helpers import get_themes
 from ecommerce.theming.management.commands.update_assets import (
     SYSTEM_SASS_PATHS,
@@ -66,8 +69,7 @@ class TestUpdateAssets(TestCase):
         """
         with override_settings(ENABLE_COMPREHENSIVE_THEMING=False):
             with patch(
-                "ecommerce.theming.management.commands.update_assets.get_sass_directories",
-            ) as mock_get_sass_dirs:
+                    "ecommerce.theming.management.commands.update_assets.get_sass_directories") as mock_get_sass_dirs:
 
                 # make sure update_assets skip theme sass if theming is disabled eben if called with 'themes=all'
                 call_command("update_assets", "--skip-collect", themes=["all"])
@@ -108,7 +110,7 @@ class TestUpdateAssets(TestCase):
         ]
 
         returned_dirs = get_sass_directories(themes=self.themes, system=True)
-        self.assertItemsEqual(expected_directories, returned_dirs)
+        self.assertCountEqual(expected_directories, returned_dirs)
 
     def test_get_sass_directories_with_no_themes(self):
         """
@@ -124,7 +126,7 @@ class TestUpdateAssets(TestCase):
         ]
 
         returned_dirs = get_sass_directories(themes=[], system=True)
-        self.assertItemsEqual(expected_directories, returned_dirs)
+        self.assertCountEqual(expected_directories, returned_dirs)
 
     def test_non_existent_sass_dir_error(self):
         """

@@ -1,4 +1,7 @@
+
+
 from django.db import models
+from django.utils.encoding import python_2_unicode_compatible
 from django.utils.translation import ugettext_lazy as _
 from edx_django_utils.cache import DEFAULT_REQUEST_CACHE
 from oscar.apps.basket.abstract_models import AbstractBasket
@@ -11,6 +14,7 @@ OrderNumberGenerator = get_class('order.utils', 'OrderNumberGenerator')
 Selector = get_class('partner.strategy', 'Selector')
 
 
+@python_2_unicode_compatible
 class Basket(AbstractBasket):
     site = models.ForeignKey(
         'sites.Site', verbose_name=_("Site"), null=True, blank=True, default=None, on_delete=models.SET_NULL
@@ -35,7 +39,7 @@ class Basket(AbstractBasket):
         merge them into one.
         """
         editable_baskets = cls.objects.filter(site=site, owner=user, status__in=cls.editable_statuses)
-        if len(editable_baskets) == 0:
+        if not editable_baskets:
             basket = cls.create_basket(site, user)
         else:
             stale_baskets = list(editable_baskets)
@@ -90,8 +94,8 @@ class Basket(AbstractBasket):
         for v in self.vouchers.all():
             self.vouchers.remove(v)
 
-    def __unicode__(self):
-        return _(u"{id} - {status} basket (owner: {owner}, lines: {num_lines})").format(
+    def __str__(self):
+        return _("{id} - {status} basket (owner: {owner}, lines: {num_lines})").format(
             id=self.id,
             status=self.status,
             owner=self.owner,
@@ -104,7 +108,7 @@ class BasketAttributeType(models.Model):
     """
     name = models.CharField(_("Name"), max_length=128, unique=True)
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
 
@@ -120,8 +124,9 @@ class BasketAttribute(models.Model):
     )
     value_text = models.TextField(_("Text Attribute"))
 
-    class Meta(object):
+    class Meta:
         unique_together = ('basket', 'attribute_type')
+
 
 # noinspection PyUnresolvedReferences
 from oscar.apps.basket.models import *  # noqa isort:skip pylint: disable=wildcard-import,unused-wildcard-import,wrong-import-position,wrong-import-order,ungrouped-imports

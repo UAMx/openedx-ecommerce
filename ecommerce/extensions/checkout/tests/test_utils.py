@@ -1,10 +1,13 @@
+
+
 import json
 
 import ddt
 import httpretty
 import mock
 import requests
-from requests import ConnectionError, Timeout
+from requests import ConnectionError as ReqConnectionError
+from requests import Timeout
 
 from ecommerce.extensions.checkout.utils import get_credit_provider_details
 from ecommerce.tests.testcases import TestCase
@@ -33,6 +36,7 @@ class UtilTests(TestCase):
     @httpretty.activate
     def test_get_credit_provider_details(self):
         """ Check that credit provider details are returned. """
+        self.mock_access_token_response()
         httpretty.register_uri(
             httpretty.GET,
             self.site.siteconfiguration.build_lms_url(self.get_credit_provider_details_url(self.credit_provider_id)),
@@ -40,7 +44,6 @@ class UtilTests(TestCase):
             content_type="application/json"
         )
         provider_data = get_credit_provider_details(
-            self.access_token,
             self.credit_provider_id,
             self.site.siteconfiguration
         )
@@ -55,19 +58,17 @@ class UtilTests(TestCase):
             status=400
         )
         provider_data = get_credit_provider_details(
-            self.access_token,
             self.credit_provider_id,
             self.site.siteconfiguration
         )
         self.assertEqual(provider_data, None)
 
-    @ddt.data(ConnectionError, Timeout)
+    @ddt.data(ReqConnectionError, Timeout)
     def test_exceptions(self, exception):
         """ Verify the function returns None when a request exception is raised. """
         with mock.patch.object(requests, 'get', mock.Mock(side_effect=exception)):
             self.assertIsNone(
                 get_credit_provider_details(
-                    self.access_token,
                     self.credit_provider_id,
                     self.site.siteconfiguration
                 )

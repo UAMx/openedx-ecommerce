@@ -12,6 +12,8 @@ that later delegates to the Django one. For example, you could introduce WSGI
 middleware here, or combine a Django application with an application of another
 framework.
 """
+
+
 import os
 from os.path import abspath, dirname
 from sys import path

@@ -1,12 +1,14 @@
+
+
 import json
 
 import ddt
 import mock
+from analytics import Client
 from django.contrib.auth.models import AnonymousUser
 from django.test.client import RequestFactory
-from oscar.test import factories
 
-from analytics import Client
+from ecommerce.core.models import User  # pylint: disable=unused-import
 from ecommerce.courses.tests.factories import CourseFactory
 from ecommerce.extensions.analytics.utils import (
     ECOM_TRACKING_ID_FMT,
@@ -19,6 +21,7 @@ from ecommerce.extensions.analytics.utils import (
 from ecommerce.extensions.basket.tests.mixins import BasketMixin
 from ecommerce.extensions.catalogue.tests.mixins import DiscoveryTestMixin
 from ecommerce.extensions.test.factories import create_basket
+from ecommerce.tests.factories import UserFactory
 from ecommerce.tests.testcases import TransactionTestCase
 
 
@@ -37,7 +40,7 @@ class UtilsTest(DiscoveryTestMixin, BasketMixin, TransactionTestCase):
         data = prepare_analytics_data(user, self.site.siteconfiguration.segment_key)
         self.assertDictEqual(json.loads(data), {
             'tracking': {'segmentApplicationId': self.site.siteconfiguration.segment_key},
-            'user': {'user_tracking_id': '1235123', 'name': 'John Doe', 'email': 'test@example.com'}
+            'user': {'user_tracking_id': user.lms_user_id, 'name': 'John Doe', 'email': 'test@example.com'}
         })
 
     def test_anon_prepare_analytics_data(self):
@@ -56,14 +59,34 @@ class UtilsTest(DiscoveryTestMixin, BasketMixin, TransactionTestCase):
             'lms_user_id': 'foo',
             'lms_ip': '18.0.0.1',
         }
+
         user = self.create_user(tracking_context=tracking_context)
-        expected = (tracking_context['lms_user_id'], tracking_context['ga_client_id'], tracking_context['lms_ip'])
+        expected = (user.lms_user_id, tracking_context['ga_client_id'], tracking_context['lms_ip'])
         self.assertEqual(parse_tracking_context(user), expected)
 
+    def test_parse_tracking_context_not_available(self):
+        """
+        The method should still pull a value for the user_id when there is no tracking context.
+        """
+        user = self.create_user()
+        expected_context = (user.lms_user_id, None, None)
+
+        context = parse_tracking_context(user)
+        self.assertEqual(context, expected_context)
+
+    def test_parse_tracking_context_missing_lms_user_id(self):
+        """ The method should parse the tracking context on the User object. """
+        tracking_context = {
+            'ga_client_id': 'test-client-id',
+            'lms_user_id': 'foo',
+            'lms_ip': '18.0.0.1',
+        }
+
         # If no LMS user ID is provided, we should create one based on the E-Commerce ID
-        del tracking_context['lms_user_id']
-        user = self.create_user(tracking_context=tracking_context)
-        expected = (ECOM_TRACKING_ID_FMT.format(user.id), tracking_context['ga_client_id'], tracking_context['lms_ip'])
+        user = self.create_user(tracking_context=tracking_context, lms_user_id=None)
+        expected_user_id = ECOM_TRACKING_ID_FMT.format(user.id)
+
+        expected = (expected_user_id, tracking_context['ga_client_id'], tracking_context['lms_ip'])
         self.assertEqual(parse_tracking_context(user), expected)
 
     def test_track_segment_event_without_segment_key(self):
@@ -74,7 +97,8 @@ class UtilsTest(DiscoveryTestMixin, BasketMixin, TransactionTestCase):
         with mock.patch('logging.Logger.debug') as mock_debug:
             msg = 'Event [foo] was NOT fired because no Segment key is set for site configuration [{}]'
             msg = msg.format(self.site_configuration.pk)
-            self.assertEqual(track_segment_event(self.site, self.create_user(), 'foo', {}), (False, msg))
+            user = self.create_user()
+            self.assertEqual(track_segment_event(self.site, user, 'foo', {}), (False, msg))
             mock_debug.assert_called_with(msg)
 
     def test_track_segment_event(self):
@@ -100,7 +124,7 @@ class UtilsTest(DiscoveryTestMixin, BasketMixin, TransactionTestCase):
         """ The method should return a dict formatted for Segment. """
         basket = create_basket(empty=True)
         basket.site = self.site
-        basket.owner = factories.UserFactory()
+        basket.owner = UserFactory()
         basket.save()
         course = CourseFactory(partner=self.partner)
         seat = course.create_or_update_seat('verified', True, 100)
@@ -155,6 +179,7 @@ class UtilsTest(DiscoveryTestMixin, BasketMixin, TransactionTestCase):
                 'ga_client_id': 'test-client-id',
                 'lms_user_id': 'foo',
                 'lms_ip': '18.0.0.1',
-            })
+            }
+        )
         event = 'foo'
         return user, event, properties

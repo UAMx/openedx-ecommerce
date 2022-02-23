@@ -1,3 +1,5 @@
+
+
 import logging
 
 from oscar.core.loading import get_class, get_model
@@ -10,17 +12,18 @@ CommunicationEventType = get_model('customer', 'CommunicationEventType')
 Dispatcher = get_class('customer.utils', 'Dispatcher')
 
 
-def send_notification(user, commtype_code, context, site):
+def send_notification(user, commtype_code, context, site, recipient=None):
     """Send different notification mail to the user based on the triggering event.
 
     Args:
     user(obj): 'User' object to whom email is to send
     commtype_code(str): Communication type code
     context(dict): context to be used in the mail
+    recipient(str): Email which overrides user.email when set
 
     """
 
-    tracking_id, client_id, ip = parse_tracking_context(user)
+    tracking_id, client_id, ip = parse_tracking_context(user, usage='notification')
 
     tracking_pixel = 'https://www.google-analytics.com/collect?v=1&t=event&ec=email&ea=open&tid={tracking_id}' \
                      '&cid={client_id}&uip={ip}'.format(tracking_id=tracking_id, client_id=client_id, ip=ip)
@@ -46,4 +49,4 @@ def send_notification(user, commtype_code, context, site):
 
     if messages and (messages['body'] or messages['html']):
         messages['html'] = transform(messages['html'])
-        Dispatcher().dispatch_user_messages(user, messages, site)
+        Dispatcher().dispatch_user_messages(user, messages, site, recipient)

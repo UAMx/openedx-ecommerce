@@ -1,4 +1,6 @@
 """HTTP endpoints for course publication."""
+
+
 from rest_framework import generics, status
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
@@ -34,11 +36,13 @@ class AtomicPublicationView(generics.CreateAPIView, generics.UpdateAPIView):
 
         serializer = self.get_serializer(data=data)
         is_valid = serializer.is_valid(raise_exception=True)
-        if is_valid:
-            created, failure, message = serializer.save()
-            if failure:
-                return Response({'error': message}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            else:
-                content = serializer.data
-                content['message'] = message if message else None
-                return Response(content, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        if not is_valid:
+            return None
+
+        created, failure, message = serializer.save()
+        if failure:
+            return Response({'error': message}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        content = serializer.data
+        content['message'] = message if message else None
+        return Response(content, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)

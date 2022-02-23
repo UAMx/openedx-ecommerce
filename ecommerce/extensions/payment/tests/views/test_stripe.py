@@ -1,4 +1,4 @@
-import json
+
 
 import stripe
 from django.conf import settings
@@ -11,6 +11,7 @@ from ecommerce.core.constants import ENROLLMENT_CODE_PRODUCT_CLASS_NAME, ENROLLM
 from ecommerce.core.models import BusinessClient
 from ecommerce.core.tests import toggle_switch
 from ecommerce.courses.tests.factories import CourseFactory
+from ecommerce.extensions.basket.constants import PURCHASER_BEHALF_ATTRIBUTE
 from ecommerce.extensions.basket.utils import basket_add_organization_attribute
 from ecommerce.extensions.checkout.utils import get_receipt_page_url
 from ecommerce.extensions.order.constants import PaymentEventTypeName
@@ -39,8 +40,12 @@ class StripeSubmitViewTests(PaymentEventsMixin, TestCase):
 
     def assert_successful_order_response(self, response, order_number):
         assert response.status_code == 201
-        receipt_url = get_receipt_page_url(self.site_configuration, order_number)
-        assert json.loads(response.content) == {'url': receipt_url}
+        receipt_url = get_receipt_page_url(
+            self.site_configuration,
+            order_number,
+            disable_back_button=True,
+        )
+        assert response.json() == {'url': receipt_url}
 
     def assert_order_created(self, basket, billing_address, card_type, label):
         order = Order.objects.get(number=basket.order_number, total_incl_tax=basket.total_incl_tax)
@@ -76,8 +81,7 @@ class StripeSubmitViewTests(PaymentEventsMixin, TestCase):
     def test_login_required(self):
         self.client.logout()
         response = self.client.post(self.path)
-        expected_url = '{base}?next={path}'.format(base=self.get_full_url(path=reverse(settings.LOGIN_URL)),
-                                                   path=self.path)
+        expected_url = '{base}?next={path}'.format(base=reverse(settings.LOGIN_URL), path=self.path)
         self.assertRedirects(response, expected_url, fetch_redirect_response=False)
 
     def test_payment_error(self):
@@ -89,7 +93,7 @@ class StripeSubmitViewTests(PaymentEventsMixin, TestCase):
                 response = self.client.post(self.path, data)
 
         assert response.status_code == 400
-        assert response.content == '{}'
+        assert response.content.decode('utf-8') == '{}'
 
     def test_billing_address_error(self):
         basket = self.create_basket()
@@ -158,6 +162,7 @@ class StripeSubmitViewTests(PaymentEventsMixin, TestCase):
 
         data = self.generate_form_data(basket.id)
         data.update({'organization': 'Dummy Business Client'})
+        data.update({PURCHASER_BEHALF_ATTRIBUTE: 'False'})
 
         # Manually add organization attribute on the basket for testing
         basket_add_organization_attribute(basket, data)

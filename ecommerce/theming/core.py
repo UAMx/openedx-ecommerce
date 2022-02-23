@@ -1,6 +1,8 @@
 """
 Core logic for Comprehensive Theming.
 """
+
+
 from django.conf import settings
 
 from ecommerce.theming.helpers import get_themes

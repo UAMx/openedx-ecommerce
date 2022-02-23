@@ -1,17 +1,23 @@
+
+
 import newrelic.agent
-import waffle
-
+from edx_django_utils import monitoring as monitoring_utils
 from oscar.apps.basket.middleware import BasketMiddleware as OscarBasketMiddleware
-from oscar.core.loading import get_class, get_model
+from oscar.core.loading import get_model
 
-from ecommerce.extensions.offer.constants import CUSTOM_APPLICATOR_USE_FLAG
+from ecommerce.extensions.basket.utils import apply_offers_on_basket
 
-Applicator = get_class('offer.applicator', 'Applicator')
 Basket = get_model('basket', 'basket')
-CustomApplicator = get_class('offer.applicator', 'CustomApplicator')
 
 
 class BasketMiddleware(OscarBasketMiddleware):
+    """
+    Custom Basket Middleware that overrides Oscar's Basket Middleware
+
+    Must subclass `object` to use `super` now that `BasketMiddleware` has been
+    rewritten in Django 1.11 style
+    """
+
     def get_cookie_key(self, request):
         """
         Returns the cookie name to use for storing a cookie basket.
@@ -30,13 +36,14 @@ class BasketMiddleware(OscarBasketMiddleware):
         """ Return the open basket for this request """
         # pylint: disable=protected-access
         if request._basket_cache is not None:
+            monitoring_utils.set_custom_metric('basket_id', request._basket_cache.id)
             return request._basket_cache
 
         manager = Basket.open
         cookie_key = self.get_cookie_key(request)
         cookie_basket = self.get_cookie_basket(cookie_key, request, manager)
 
-        if hasattr(request, 'user') and request.user.is_authenticated():
+        if hasattr(request, 'user') and request.user.is_authenticated:
             # Signed-in user: if they have a cookie basket too, it means
             # that they have just signed in and we need to merge their cookie
             # basket into their user basket, then delete the cookie.
@@ -67,13 +74,13 @@ class BasketMiddleware(OscarBasketMiddleware):
 
         # Cache basket instance for the duration of this request
         request._basket_cache = basket
+        if request._basket_cache is not None:
+            monitoring_utils.set_custom_metric('basket_id', request._basket_cache.id)
+        else:  # pragma: no cover
+            pass
 
         return basket
 
     @newrelic.agent.function_trace()
     def apply_offers_to_basket(self, request, basket):
-        if not basket.is_empty:
-            if waffle.flag_is_active(request, CUSTOM_APPLICATOR_USE_FLAG):  # pragma: no cover
-                CustomApplicator().apply(basket, request.user, request)
-            else:
-                Applicator().apply(basket, request.user, request)
+        apply_offers_on_basket(request, basket)

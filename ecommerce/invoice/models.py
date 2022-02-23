@@ -1,7 +1,10 @@
+
+
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils.translation import ugettext_lazy as _
 from django_extensions.db.models import TimeStampedModel
+from simple_history.models import HistoricalRecords
 
 
 class Invoice(TimeStampedModel):
@@ -46,6 +49,8 @@ class Invoice(TimeStampedModel):
         validators=[MinValueValidator(1), MaxValueValidator(100)],
         null=True, blank=True
     )
+
+    history = HistoricalRecords()
 
     @property
     def total(self):

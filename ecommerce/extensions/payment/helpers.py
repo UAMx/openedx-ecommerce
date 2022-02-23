@@ -1,4 +1,6 @@
 """Helper functions for working with payment processor classes."""
+
+
 import base64
 import hashlib
 import hmac

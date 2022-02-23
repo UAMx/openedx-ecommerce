@@ -1,11 +1,11 @@
 # coding=utf-8
-from __future__ import unicode_literals
+
 
 import datetime
 import json
 import logging
 from decimal import Decimal
-from urlparse import urlparse
+from urllib.parse import urlparse
 
 import httpretty
 import mock
@@ -45,7 +45,6 @@ class CourseMigrationTestMixin(DiscoveryTestMixin):
     prices = {
         'honor': 0,
         'verified': 10,
-        'no-id-professional': 100,
         'professional': 1000,
         'audit': 0,
         'credit': 0,
@@ -81,7 +80,7 @@ class CourseMigrationTestMixin(DiscoveryTestMixin):
         body = {
             'course_id': self.course_id,
             'course_modes': [{'slug': mode, 'min_price': price, 'expiration_datetime': EXPIRES_STRING} for
-                             mode, price in self.prices.iteritems()]
+                             mode, price in self.prices.items()]
         }
         httpretty.register_uri(httpretty.GET, self.enrollment_api_url, body=json.dumps(body), content_type=JSON)
 
@@ -187,7 +186,8 @@ class MigratedCourseTests(CourseMigrationTestMixin, TestCase):
             migrated_course = MigratedCourse(self.course_id, self.site.domain)
             migrated_course.load_from_lms()
         except Exception as ex:  # pylint: disable=broad-except
-            self.assertEqual(ex.message, 'Aborting migration. No name is available for {}.'.format(self.course_id))
+            self.assertEqual(str(ex),
+                             'Aborting migration. No name is available for {}.'.format(self.course_id))
 
         # Verify the Course Structure API was called.
         last_request = httpretty.last_request()
@@ -297,14 +297,18 @@ class CommandTests(CourseMigrationTestMixin, TestCase):
         self._mock_lms_apis()
 
         with mock.patch.object(LMSPublisher, 'publish') as mock_publish:
-            with LogCapture(LOGGER_NAME, level=logging.ERROR) as l:
+            with LogCapture(LOGGER_NAME, level=logging.ERROR) as captured_logger:
                 call_command(
                     'migrate_course',
                     self.course_id,
                     commit=True
                 )
 
-                l.check((LOGGER_NAME, 'ERROR', 'Courses cannot be migrated without providing a site domain.'))
+                captured_logger.check((
+                    LOGGER_NAME,
+                    'ERROR',
+                    'Courses cannot be migrated without providing a site domain.'
+                ))
                 # Verify that the migrated course was published back to the LMS
                 self.assertFalse(mock_publish.called)
 

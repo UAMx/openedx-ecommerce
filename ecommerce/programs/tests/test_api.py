@@ -1,7 +1,9 @@
+
+
 import uuid
 
 import httpretty
-from requests import ConnectionError
+from requests import ConnectionError as ReqConnectionError
 
 from ecommerce.programs.api import ProgramsApiClient
 from ecommerce.programs.tests.mixins import ProgramTestMixin
@@ -33,5 +35,5 @@ class ProgramsApiClientTests(ProgramTestMixin, TestCase):
 
         # Calls from different domains should not pull from cache
         self.client.site_domain = 'different-domain'
-        with self.assertRaises(ConnectionError):
+        with self.assertRaises(ReqConnectionError):
             self.client.get_program(program_uuid)

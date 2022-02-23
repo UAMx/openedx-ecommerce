@@ -1,6 +1,8 @@
 """
     Helpers for accessing comprehensive theming related variables.
 """
+
+
 import logging
 import os
 
@@ -151,7 +153,7 @@ def get_theme_base_dirs():
 
     if not isinstance(theme_dirs, list):
         raise ImproperlyConfigured("COMPREHENSIVE_THEME_DIRS must be a list.")
-    if not all([isinstance(theme_dir, basestring) for theme_dir in theme_dirs]):
+    if not all([isinstance(theme_dir, str) for theme_dir in theme_dirs]):
         raise ImproperlyConfigured("COMPREHENSIVE_THEME_DIRS must contain only strings.")
     if not all([theme_dir.startswith("/") for theme_dir in theme_dirs]):
         raise ImproperlyConfigured("COMPREHENSIVE_THEME_DIRS must contain only absolute paths to themes dirs.")
@@ -177,8 +179,8 @@ def get_themes(themes_dir=None):
     themes_dirs = [Path(themes_dir)] if themes_dir else get_theme_base_dirs()
     # pick only directories and discard files in themes directory
     themes = []
-    for themes_dir in themes_dirs:
-        themes.extend([Theme(name, name, themes_dir) for name in get_theme_dirs(themes_dir)])
+    for tdir in themes_dirs:
+        themes.extend([Theme(name, name, tdir) for name in get_theme_dirs(tdir)])
 
     return themes
 
@@ -205,7 +207,7 @@ def is_theme_dir(_dir):
     return bool(os.path.isdir(_dir) and theme_sub_directories.intersection(os.listdir(_dir)))
 
 
-class Theme(object):
+class Theme:
     """
     class to encapsulate theme related information.
     """
@@ -238,11 +240,11 @@ class Theme(object):
     def __hash__(self):
         return hash((self.theme_dir_name, self.path))
 
-    def __unicode__(self):
+    def __str__(self):
         return u"<Theme: {name} at '{path}'>".format(name=self.name, path=self.path)
 
     def __repr__(self):
-        return self.__unicode__()
+        return self.__str__()
 
     @property
     def path(self):

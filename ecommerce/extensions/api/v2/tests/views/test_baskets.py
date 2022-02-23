@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
+
 
 import datetime
 import json
@@ -13,11 +13,14 @@ import mock
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 from django.urls import reverse
+from edx_rest_framework_extensions.auth.jwt.cookies import jwt_cookie_name
 from oscar.core.loading import get_model
 from oscar.test import factories
 from oscar.test.factories import BasketFactory
 from rest_framework.throttling import UserRateThrottle
+from waffle.testutils import override_switch
 
+from ecommerce.core.constants import ALLOW_MISSING_LMS_USER_ID
 from ecommerce.courses.models import Course
 from ecommerce.extensions.api import exceptions as api_exceptions
 from ecommerce.extensions.api.tests.test_authentication import AccessTokenMixin
@@ -66,6 +69,7 @@ class BasketCreateViewTests(BasketCreationMixin, ThrottlingMixin, TransactionTes
     UNAVAILABLE = False
     UNAVAILABLE_MESSAGE = 'Unavailable'
     FAKE_PROCESSOR_NAME = 'awesome-processor'
+    MOCK_ACCESS_TOKEN = False
 
     def setUp(self):
         super(BasketCreateViewTests, self).setUp()
@@ -129,7 +133,7 @@ class BasketCreateViewTests(BasketCreationMixin, ThrottlingMixin, TransactionTes
         ALWAYS create a new basket. """
         # Create two editable baskets for the user
         basket_count = 2
-        for _ in xrange(basket_count):
+        for _ in range(basket_count):
             basket = Basket(owner=self.user, status='Open')
             basket.save()
 
@@ -222,7 +226,7 @@ class BasketCreateViewTests(BasketCreationMixin, ThrottlingMixin, TransactionTes
         """Test that the rate of requests to the basket creation endpoint is throttled."""
         request_limit = UserRateThrottle().num_requests
         # Make a number of requests equal to the number of allowed requests
-        for _ in xrange(request_limit):
+        for _ in range(request_limit):
             self.create_basket(skus=[self.PAID_SKU])
 
         # Make one more request to trigger throttling of the client
@@ -232,6 +236,9 @@ class BasketCreateViewTests(BasketCreationMixin, ThrottlingMixin, TransactionTes
 
     def test_jwt_authentication(self):
         """Test that requests made without a valid JWT fail."""
+        # Remove jwt cookie
+        self.client.cookies[jwt_cookie_name()] = {}
+
         # Verify that the basket creation endpoint requires JWT authentication
         response = self.create_basket(skus=[self.PAID_SKU], auth=False)
         self.assertEqual(response.status_code, 401)
@@ -272,7 +279,7 @@ class BasketCreateViewTests(BasketCreationMixin, ThrottlingMixin, TransactionTes
 
         # Validate the response status and content
         self.assertEqual(response.status_code, 500)
-        actual = json.loads(response.content)
+        actual = response.json()
         expected = {
             'developer_message': 'Test message'
         }
@@ -307,7 +314,7 @@ class BasketViewSetTests(AccessTokenMixin, ThrottlingMixin, TestCase):
         response = self.client.get(self.path, HTTP_AUTHORIZATION=self.token)
 
         self.assertEqual(response.status_code, 200)
-        content = json.loads(response.content)
+        content = response.json()
         self.assertEqual(content['count'], 1)
         self.assertEqual(content['results'][0]['id'], basket.id)
 
@@ -327,7 +334,7 @@ class BasketViewSetTests(AccessTokenMixin, ThrottlingMixin, TestCase):
         response = self.client.get(self.path, HTTP_AUTHORIZATION=self.token)
 
         self.assertEqual(response.status_code, 200)
-        content = json.loads(response.content)
+        content = response.json()
         self.assertEqual(content['results'][0]['id'], basket.id)
         self.assertEqual(content['results'][0]['status'], basket.status)
         self.assertIsNotNone(content['results'][0]['vouchers'])
@@ -342,11 +349,11 @@ class BasketViewSetTests(AccessTokenMixin, ThrottlingMixin, TestCase):
 
         with mock.patch('ecommerce.extensions.api.serializers.VoucherSerializer', side_effect=ValueError):
             response = self.client.get(self.path, HTTP_AUTHORIZATION=self.token)
-            self.assertIsNone(json.loads(response.content)['results'][0]['vouchers'])
+            self.assertIsNone(response.json()['results'][0]['vouchers'])
 
         with mock.patch('ecommerce.extensions.api.serializers.VoucherSerializer', side_effect=AttributeError):
             response = self.client.get(self.path, HTTP_AUTHORIZATION=self.token)
-            self.assertIsNone(json.loads(response.content)['results'][0]['vouchers'])
+            self.assertIsNone(response.json()['results'][0]['vouchers'])
 
 
 class OrderByBasketRetrieveViewTests(OrderDetailViewTestMixin, TestCase):
@@ -390,7 +397,7 @@ class BasketDestroyViewTests(TestCase):
         self.assertFalse(Basket.objects.filter(id=self.basket.id).exists())
 
 
-class BasketCalculateViewTests(ProgramTestMixin, TestCase):
+class BasketCalculateViewTests(ProgramTestMixin, ThrottlingMixin, TestCase):
     def setUp(self):
         super(BasketCalculateViewTests, self).setUp()
         self.products = ProductFactory.create_batch(3, stockrecords__partner=self.partner, categories=[])
@@ -453,8 +460,11 @@ class BasketCalculateViewTests(ProgramTestMixin, TestCase):
         self.assertEqual(response.data, expected)
 
     @httpretty.activate
-    def test_basket_calculate_program_offer(self):
-        """ Verify successful basket calculation with a program offer """
+    def test_basket_calculate_program_offer_unrelated_bundle_id(self):
+        """
+        Test that if bundle id is present and skus do not belong to this bundle,
+        program offers do not apply
+        """
         offer = ProgramOfferFactory(
             site=self.site,
             benefit=PercentageDiscountBenefitWithoutRangeFactory(value=100)
@@ -463,10 +473,49 @@ class BasketCalculateViewTests(ProgramTestMixin, TestCase):
         self.mock_program_detail_endpoint(program_uuid, self.site_configuration.discovery_api_url)
         self.mock_user_data(self.user.username)
 
-        response = self.client.get(self.url)
+        response = self.client.get(self.url + '&bundle={}'.format(program_uuid))
         expected = {
             'total_incl_tax_excl_discounts': self.product_total,
             'total_incl_tax': self.product_total,
+            'currency': 'GBP'
+        }
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, expected)
+
+    @httpretty.activate
+    def test_basket_calculate_program_offer_with_bundle_id(self):
+        """
+        Test that if a program offer is present and bundle id is provided,
+        then basket calculates program offer successfully
+        """
+        products, program_uuid = self._create_program_with_courses_and_offer()
+        url = self._generate_sku_url(products, self.user.username)
+        url += '&bundle={}'.format(program_uuid)
+
+        response = self.client.get(url)
+        expected = {
+            'total_incl_tax_excl_discounts': Decimal(40.00),
+            'total_incl_tax': Decimal(32.00),
+            'currency': 'GBP'
+        }
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, expected)
+
+    @httpretty.activate
+    def test_basket_program_offer_with_no_bundle_id(self):
+        """
+        Test that if a program offer is present and bundle id is not provided,
+        then basket does not includes program offer
+        """
+        products, _ = self._create_program_with_courses_and_offer()
+        url = self._generate_sku_url(products, self.user.username)
+
+        response = self.client.get(url)
+        expected = {
+            'total_incl_tax_excl_discounts': Decimal(40.00),
+            'total_incl_tax': Decimal(40.00),
             'currency': 'GBP'
         }
 
@@ -524,6 +573,21 @@ class BasketCalculateViewTests(ProgramTestMixin, TestCase):
     def test_basket_calculate_by_staff_user_own_username(self):
         """Verify a staff user passing their own username gets a response about themself"""
         response = self.client.get(self.url + '&username={username}'.format(username=self.user.username))
+        self.assertEqual(response.status_code, 200)
+
+    @httpretty.activate
+    def test_basket_calculate_missing_lms_user_id(self):
+        """Verify a staff user passing a username for a user with a missing LMS user id fails"""
+        user_without_id = self.create_user(lms_user_id=None)
+        response = self.client.get(self.url + '&username={username}'.format(username=user_without_id.username))
+        self.assertEqual(response.status_code, 400)
+
+    @override_switch(ALLOW_MISSING_LMS_USER_ID, active=True)
+    @httpretty.activate
+    def test_basket_calculate_missing_lms_user_id_allow_missing(self):
+        """Verify a staff user passing a username for a user with a missing LMS user id succeeds if the switch is on"""
+        user_without_id = self.create_user(lms_user_id=None)
+        response = self.client.get(self.url + '&username={username}'.format(username=user_without_id.username))
         self.assertEqual(response.status_code, 200)
 
     @httpretty.activate
@@ -614,7 +678,7 @@ class BasketCalculateViewTests(ProgramTestMixin, TestCase):
         different_user = self.create_user(username='different_user', is_staff=False)
 
         products = self._get_program_verified_seats(program)
-        url = self._generate_sku_url(products, username=different_user.username)
+        url = self._generate_sku_url(products, username=different_user.username) + '&bundle={}'.format(program_uuid)
         enrollment = [{'mode': 'verified', 'course_details': {'course_id': program['courses'][0]['key']}}]
         self.mock_user_data(different_user.username, owned_products=enrollment)
 
@@ -849,43 +913,29 @@ class BasketCalculateViewTests(ProgramTestMixin, TestCase):
             self.client.get(self.url + '&code={code}'.format(code=voucher.code))
             self.assertTrue(mock_logger.called)
 
-    @mock.patch('ecommerce.extensions.api.v2.views.baskets.get_entitlement_voucher')
-    def test_basket_calculate_entitlement_voucher(self, mock_get_entitlement_voucher):
-        """ Verify successful basket calculation considering Enterprise entitlement vouchers """
+    def _create_program_with_courses_and_offer(self):
+        offer = ProgramOfferFactory(
+            site=self.site,
+            partner=self.site.siteconfiguration.partner,
+            benefit=PercentageDiscountBenefitWithoutRangeFactory(value=20)
+        )
+        program_uuid = offer.condition.program_uuid
+        program_data = self.mock_program_detail_endpoint(program_uuid, self.site_configuration.discovery_api_url)
+        self.mock_user_data(self.user.username)
 
-        discount = 5
-        # Using ONCE_PER_CUSTOMER usage here because it fully exercises the Oscar Applicator code.
-        voucher, _ = prepare_voucher(_range=self.range, benefit_type=Benefit.FIXED, benefit_value=discount,
-                                     usage=Voucher.ONCE_PER_CUSTOMER)
-        mock_get_entitlement_voucher.return_value = voucher
+        sku_list = []
+        products = []
+        for course in program_data['courses']:
+            sku_list.append(course['entitlements'][0]['sku'])
 
-        # If the list of sku's contains more than one product no entitlement voucher is applied
-        response = self.client.get(self.url)
-
-        expected = {
-            'total_incl_tax_excl_discounts': self.product_total,
-            'total_incl_tax': self.product_total,
-            'currency': 'GBP'
-        }
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, expected)
-
-        # If it's only one product, the entitlement voucher is applied
-        product = self.products[0]
-        url = self._generate_sku_url(self.products[0:1], username=self.user.username)
-        product_total = product.stockrecords.first().price_excl_tax
-
-        response = self.client.get(url)
-
-        expected = {
-            'total_incl_tax_excl_discounts': product_total,
-            'total_incl_tax': product_total - discount,
-            'currency': 'GBP'
-        }
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, expected)
+        for sku in sku_list:
+            products.append(
+                factories.ProductFactory(
+                    stockrecords__partner=self.partner,
+                    stockrecords__price_excl_tax=Decimal('10.00'),
+                    stockrecords__partner_sku=sku,
+                ))
+        return products, program_uuid
 
     def _setup_anonymous_basket_calculate(self):
         """
@@ -908,6 +958,7 @@ class BasketCalculateViewTests(ProgramTestMixin, TestCase):
         )
         products = self._get_program_verified_seats(program)
         url = self._generate_sku_url(products, username=None)
+        url += '&bundle={}'.format(program_uuid)
         return products, url
 
     def _generate_sku_url(self, products, username=None, add_query_params=True):
@@ -923,7 +974,7 @@ class BasketCalculateViewTests(ProgramTestMixin, TestCase):
 
         """
         sku_list = [product.stockrecords.first().partner_sku for product in products]
-        qs = urllib.urlencode(
+        qs = urllib.parse.urlencode(
             {'sku': sku_list},
             True
         )

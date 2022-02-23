@@ -1,3 +1,5 @@
+
+
 import datetime
 import json
 
@@ -13,11 +15,11 @@ from ecommerce.core.models import BusinessClient
 from ecommerce.extensions.api.v2.views.coupons import CouponViewSet
 from ecommerce.extensions.basket.utils import prepare_basket
 from ecommerce.extensions.catalogue.utils import create_coupon_product
-from ecommerce.tests.factories import PartnerFactory
+from ecommerce.tests.factories import PartnerFactory, UserFactory
 from ecommerce.tests.mixins import Applicator, Benefit, Catalog, ProductClass, SiteMixin, Voucher
 
 
-class DiscoveryMockMixin(object):
+class DiscoveryMockMixin:
     """ Mocks for the Discovery service response. """
     def setUp(self):
         super(DiscoveryMockMixin, self).setUp()
@@ -56,28 +58,64 @@ class DiscoveryMockMixin(object):
             content_type='application/json'
         )
 
-    def mock_course_detail_endpoint(self, course, discovery_api_url, course_info=None):
-        """ Mocks the course detail endpoint on the Discovery API. """
+    def mock_course_detail_endpoint(self, discovery_api_url, course=None, course_info=None, course_key=None):
+        """
+        Mocks the course detail endpoint on the Discovery API.
+
+        Either it will look up by course.attr.UUID or course_key.
+        """
         if not course_info:
             course_info = {
                 "course": "edX+DemoX",
-                "uuid": course.attr.UUID,
-                "title": course.title,
+                "key": "edX+DemoX",
+                "title": "edX Demo Course",
                 "short_description": 'Foo',
                 "image": {
                     "src": "/path/to/image.jpg",
                 },
             }
 
+            if course:
+                course_info.update({
+                    "uuid": course.attr.UUID,
+                    "title": course.title
+                })
+
+            if course_key:
+                course_info.update({
+                    "key": course_key
+                })
+
         course_info_json = json.dumps(course_info)
         course_url = '{}courses/{}/'.format(
             discovery_api_url,
-            course.attr.UUID,
+            course_key if course_key else course.attr.UUID,
         )
 
         httpretty.register_uri(
             httpretty.GET, course_url,
             body=course_info_json,
+            content_type='application/json'
+        )
+
+    def mock_course_detail_endpoint_error(self, course_identifier, discovery_api_url, error):
+        """
+        Mocks the course detail endpoint on the Discovery API to fake a request error.
+
+        course_identifier can be course UUID or key.
+        """
+
+        def callback(request, uri, headers):  # pylint: disable=unused-argument
+            raise error
+
+        course_url = '{}courses/{}/'.format(
+            discovery_api_url,
+            course_identifier,
+        )
+
+        httpretty.register_uri(
+            httpretty.GET, course_url,
+            body=callback,
             content_type='application/json'
         )
 
@@ -396,7 +434,7 @@ class CouponMixin(SiteMixin):
 
     def setUp(self):
         super(CouponMixin, self).setUp()
-        self.category = factories.CategoryFactory(path='1000')
+        self.category = factories.CategoryFactory()
 
         # Force the creation of a coupon ProductClass
         self.coupon_product_class  # pylint: disable=pointless-statement
@@ -428,12 +466,20 @@ class CouponMixin(SiteMixin):
                 type='text'
             )
 
+            factories.ProductAttributeFactory(
+                product_class=pc,
+                name='Sales Force ID',
+                code='sales_force_id',
+                type='text'
+            )
+
         return pc
 
     def create_coupon(self, benefit_type=Benefit.PERCENTAGE, benefit_value=100, catalog=None, catalog_query=None,
                       client=None, code='', course_seat_types=None, email_domains=None, enterprise_customer=None,
                       enterprise_customer_catalog=None, max_uses=None, note=None, partner=None, price=100, quantity=5,
-                      title='Test coupon', voucher_type=Voucher.SINGLE_USE, course_catalog=None, program_uuid=None):
+                      title='Test coupon', voucher_type=Voucher.SINGLE_USE, course_catalog=None, program_uuid=None,
+                      start_datetime=None, end_datetime=None, sales_force_id=None):
         """Helper method for creating a coupon.
 
         Arguments:
@@ -456,6 +502,7 @@ class CouponMixin(SiteMixin):
             title(str): Title of the coupon
             voucher_type (str): Voucher type
             program_uuid (str): Program UUID
+            sales_force_id (str): Sales Force Opprtunity ID
 
         Returns:
             coupon (Coupon)
@@ -468,13 +515,12 @@ class CouponMixin(SiteMixin):
         if (catalog is None and not enterprise_customer_catalog and not
                 ((catalog_query or course_catalog or program_uuid) and course_seat_types)):
             catalog = Catalog.objects.create(partner=partner)
-        if code is not '':
+        if code != '':
             quantity = 1
 
         with mock.patch(
-            "ecommerce.extensions.voucher.utils.get_enterprise_customer",
-            mock.Mock(return_value={'name': 'Fake enterprise'})
-        ):
+                "ecommerce.extensions.voucher.utils.get_enterprise_customer",
+                mock.Mock(return_value={'name': 'Fake enterprise'})):
             coupon = create_coupon_product(
                 benefit_type=benefit_type,
                 benefit_value=benefit_value,
@@ -485,7 +531,7 @@ class CouponMixin(SiteMixin):
                 course_catalog=course_catalog,
                 course_seat_types=course_seat_types,
                 email_domains=email_domains,
-                end_datetime=datetime.datetime(2020, 1, 1),
+                end_datetime=end_datetime or (datetime.datetime.now() + datetime.timedelta(days=500)),
                 enterprise_customer=enterprise_customer,
                 enterprise_customer_catalog=enterprise_customer_catalog,
                 max_uses=max_uses,
@@ -493,16 +539,17 @@ class CouponMixin(SiteMixin):
                 partner=partner,
                 price=price,
                 quantity=quantity,
-                start_datetime=datetime.datetime(2015, 1, 1),
+                start_datetime=start_datetime or datetime.datetime(2015, 1, 1),
                 title=title,
                 voucher_type=voucher_type,
                 program_uuid=program_uuid,
-                site=self.site
+                site=self.site,
+                sales_force_id=sales_force_id,
             )
 
         request = RequestFactory()
         request.site = self.site
-        request.user = factories.UserFactory()
+        request.user = UserFactory()
         request.COOKIES = {}
         request.GET = {}
 

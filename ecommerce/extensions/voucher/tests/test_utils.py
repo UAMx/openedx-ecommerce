@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
+
 
 import uuid
 
@@ -11,11 +11,21 @@ from django.test import override_settings
 from django.utils.translation import ugettext_lazy as _
 from factory.fuzzy import FuzzyText
 from oscar.templatetags.currency_filters import currency
-from oscar.test.factories import *  # pylint:disable=wildcard-import,unused-wildcard-import
+from oscar.test.factories import (
+    BenefitFactory,
+    ConditionalOfferFactory,
+    OrderFactory,
+    OrderLineFactory,
+    RangeFactory,
+    VoucherFactory,
+    datetime,
+    get_model
+)
 
 from ecommerce.core.url_utils import get_ecommerce_url
 from ecommerce.coupons.tests.mixins import CouponMixin, DiscoveryMockMixin
 from ecommerce.courses.tests.factories import CourseFactory
+from ecommerce.entitlements.utils import create_or_update_course_entitlement
 from ecommerce.extensions.api import exceptions
 from ecommerce.extensions.catalogue.tests.mixins import DiscoveryTestMixin
 from ecommerce.extensions.fulfillment.modules import CouponFulfillmentModule
@@ -29,6 +39,7 @@ from ecommerce.extensions.voucher.utils import (
     get_voucher_discount_info,
     update_voucher_offer
 )
+from ecommerce.tests.factories import UserFactory
 from ecommerce.tests.mixins import LmsApiMockMixin
 from ecommerce.tests.testcases import TestCase
 
@@ -77,7 +88,26 @@ class UtilTests(CouponMixin, DiscoveryMockMixin, DiscoveryTestMixin, LmsApiMockM
             max_uses=1,
             voucher_type=Voucher.MULTI_USE
         )
+        self.coupon.history.all().update(history_user=self.user)
         self.coupon_vouchers = CouponVouchers.objects.filter(coupon=self.coupon)
+
+        self.entitlement = create_or_update_course_entitlement(
+            'verified', 100, self.partner, 'foo-bar', 'Foo Bar Entitlement'
+        )
+        self.entitlement_stock_record = StockRecord.objects.filter(product=self.entitlement).first()
+        self.entitlement_catalog = Catalog.objects.create(partner=self.partner)
+        self.entitlement_catalog.stock_records.add(self.entitlement_stock_record)
+        self.entitlement_coupon = self.create_coupon(
+            title='Tešt Entitlement product',
+            catalog=self.entitlement_catalog,
+            note='Tešt Entitlement note',
+            quantity=1,
+            max_uses=1,
+            voucher_type=Voucher.MULTI_USE
+        )
+        self.entitlement_coupon_vouchers = CouponVouchers.objects.filter(coupon=self.entitlement_coupon)
+
+        self.partner_sku = 'test_sku'
 
         self.data = {
             'benefit_type': Benefit.PERCENTAGE,
@@ -157,7 +187,7 @@ class UtilTests(CouponMixin, DiscoveryMockMixin, DiscoveryTestMixin, LmsApiMockM
             course_seat_types=course_seat_types,
         )
 
-    def use_voucher(self, order_num, voucher, user):
+    def use_voucher(self, order_num, voucher, user, add_entitlement=False, product=None):
         """
         Mark voucher as used by provided users
 
@@ -167,7 +197,11 @@ class UtilTests(CouponMixin, DiscoveryMockMixin, DiscoveryTestMixin, LmsApiMockM
             users (list): list of users
         """
         order = OrderFactory(number=order_num)
-        order_line = OrderLineFactory(product=self.verified_seat)
+        if add_entitlement:
+            order_line = OrderLineFactory(product=self.entitlement, partner_sku=self.partner_sku)
+            order.lines.add(order_line)
+        product = product if product else self.verified_seat
+        order_line = OrderLineFactory(product=product, partner_sku=self.partner_sku)
         order.lines.add(order_line)
         voucher.record_usage(order, user)
         voucher.offers.first().record_usage(discount={'freq': 1, 'discount': 1})
@@ -383,6 +417,24 @@ class UtilTests(CouponMixin, DiscoveryMockMixin, DiscoveryTestMixin, LmsApiMockM
             get_ecommerce_url() + self.REDEMPTION_URL.format(voucher.code)
         )
 
+    def test_generate_coupon_report_for_entitlement(self):
+        """ Verify the coupon report is generated properly in case of entitlements. """
+        self.data['coupon'] = self.entitlement_coupon
+        self.data['catalog'] = self.entitlement_catalog
+        self.coupon_vouchers = self.entitlement_coupon_vouchers
+        self.setup_coupons_for_report()
+        client = UserFactory()
+        basket = Basket.get_basket(client, self.site)
+        basket.add_product(self.entitlement_coupon)
+
+        vouchers = self.coupon_vouchers.first().vouchers.all()
+        self.use_voucher('TESTORDER1', vouchers[1], self.user, add_entitlement=True)
+        self.mock_course_api_response(course=self.course)
+        try:
+            generate_coupon_report(self.coupon_vouchers)
+        except TypeError:
+            self.fail("Exception:ErrorType raised unexpectedly!")
+
     def test_generate_coupon_report(self):
         """ Verify the coupon report is generated properly. """
         self.setup_coupons_for_report()
@@ -453,6 +505,21 @@ class UtilTests(CouponMixin, DiscoveryMockMixin, DiscoveryTestMixin, LmsApiMockM
         __, rows = generate_coupon_report([coupon_voucher])
         voucher = coupon_voucher.vouchers.first()
         self.assert_report_first_row(rows[0], dynamic_coupon, voucher)
+
+    def test_generate_coupon_report_with_deleted_product(self):
+        """ Verify the coupon report contains correct data for coupon with fixed benefit type. """
+        course = CourseFactory(id='course-v1:del-org+course+run', partner=self.partner)
+        professional_seat = course.create_or_update_seat('professional', False, 100)
+        query_coupon = self.create_catalog_coupon(catalog_query='course:*')
+
+        vouchers = query_coupon.attr.coupon_vouchers.vouchers.all()
+        first_voucher = vouchers.first()
+        self.use_voucher('TESTORDER1', first_voucher, self.user, product=professional_seat)
+        professional_seat.delete()
+
+        __, rows = generate_coupon_report([query_coupon.attr.coupon_vouchers])
+        self.assert_report_first_row(rows[0], query_coupon, first_voucher)
+        self.assertDictContainsSubset({'Redeemed For Course ID': 'Unknown'}, rows[2])
 
     def test_report_for_inactive_coupons(self):
         """ Verify the coupon report show correct status for inactive coupons. """
@@ -607,17 +674,23 @@ class UtilTests(CouponMixin, DiscoveryMockMixin, DiscoveryTestMixin, LmsApiMockM
         course2 = CourseFactory()
         order = OrderFactory(number='TESTORDER')
         order.lines.add(
-            OrderLineFactory(product=course1.create_or_update_seat('verified', False, 101))
+            OrderLineFactory(
+                product=course1.create_or_update_seat('verified', False, 101),
+                partner_sku=self.partner_sku
+            )
         )
         order.lines.add(
-            OrderLineFactory(product=course2.create_or_update_seat('verified', False, 110))
+            OrderLineFactory(
+                product=course2.create_or_update_seat('verified', False, 110),
+                partner_sku=self.partner_sku
+            )
         )
         query_coupon = self.create_catalog_coupon(catalog_query='*:*')
         voucher = query_coupon.attr.coupon_vouchers.vouchers.first()
         voucher.record_usage(order, self.user)
         field_names, rows = generate_coupon_report([query_coupon.attr.coupon_vouchers])
 
-        expected_redemed_course_ids = '{}, {}'.format(course1, course2)
+        expected_redemed_course_ids = '{}, {}'.format(course1.id, course2.id)
         self.assertEqual(rows[-1]['Redeemed For Course IDs'], expected_redemed_course_ids)
         self.assertEqual(rows[-1].get('Redeemed For Course ID'), None)
         self.assertIn('Redeemed For Course ID', field_names)

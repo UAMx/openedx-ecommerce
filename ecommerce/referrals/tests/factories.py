@@ -1,3 +1,5 @@
+
+
 import factory
 from oscar.test.factories import BasketFactory
 
@@ -6,7 +8,7 @@ from ecommerce.tests.factories import SiteFactory
 
 
 class ReferralFactory(factory.DjangoModelFactory):
-    class Meta(object):
+    class Meta:
         model = Referral
 
     basket = factory.SubFactory(BasketFactory)

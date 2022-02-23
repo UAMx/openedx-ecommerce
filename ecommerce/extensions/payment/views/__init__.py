@@ -1,7 +1,8 @@
+
+
 import abc
 import logging
 
-import six
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.utils.decorators import method_decorator
@@ -19,7 +20,7 @@ Basket = get_model('basket', 'Basket')
 
 
 class PaymentFailedView(TemplateView):
-    template_name = 'checkout/payment_error.html'
+    template_name = 'oscar/checkout/payment_error.html'
 
     def get_context_data(self, **kwargs):
         context = super(PaymentFailedView, self).get_context_data(**kwargs)
@@ -32,7 +33,7 @@ class PaymentFailedView(TemplateView):
 
 class SDNFailure(TemplateView):
     """ Display an error page when the SDN check fails at checkout. """
-    template_name = 'checkout/sdn_failure.html'
+    template_name = 'oscar/checkout/sdn_failure.html'
 
     def get_context_data(self, **kwargs):
         context = super(SDNFailure, self).get_context_data(**kwargs)
@@ -67,8 +68,8 @@ class BasePaymentSubmitView(View):
 
         if form.is_valid():
             return self.form_valid(form)
-        else:
-            return self.form_invalid(form)
+
+        return self.form_invalid(form)
 
     def get_form_kwargs(self):
         return {
@@ -87,7 +88,7 @@ class BasePaymentSubmitView(View):
             self.request.basket.id
         )
 
-        errors = {field: error[0] for field, error in six.iteritems(form.errors)}
+        errors = {field: error[0] for field, error in form.errors.items()}
         logger.debug(errors)
 
         data = {'field_errors': errors}

@@ -1,9 +1,11 @@
 """HTTP endpoints for interacting with courses."""
+
+
 import waffle
 from django.db.models import Prefetch
 from oscar.core.loading import get_model
 from rest_framework import status
-from rest_framework.decorators import detail_route
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
@@ -35,7 +37,7 @@ class CourseViewSet(NonDestroyableModelViewSet):
             self.products_prefetch, self.product_attribute_value_prefetch, 'products__stockrecords'
         )
 
-    def list(self, request, *args, **kwargs):
+    def list(self, request, *args, **kwargs):  # pylint: disable=useless-super-delegation
         """
         List all courses.
         ---
@@ -59,7 +61,7 @@ class CourseViewSet(NonDestroyableModelViewSet):
         data = serializers.CourseSerializer(course, context={'request': request}).data
         return Response(data, status=status.HTTP_201_CREATED)
 
-    def retrieve(self, request, *args, **kwargs):
+    def retrieve(self, request, *args, **kwargs):  # pylint: disable=useless-super-delegation
         """
         Retrieve details for a course.
         ---
@@ -78,7 +80,7 @@ class CourseViewSet(NonDestroyableModelViewSet):
         context['include_products'] = bool(self.request.GET.get('include_products', False)) if self.request else False
         return context
 
-    @detail_route(methods=['post'])
+    @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):  # pylint: disable=unused-argument
         """ Publish the course to LMS. """
         course = self.get_object()

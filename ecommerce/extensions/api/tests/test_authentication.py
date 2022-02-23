@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
+
+
 import json
-from urlparse import urljoin
+from urllib.parse import urljoin
 
 import httpretty
 import mock
@@ -10,7 +12,7 @@ from ecommerce.extensions.api.authentication import BearerAuthentication
 from ecommerce.tests.testcases import TestCase
 
 
-class AccessTokenMixin(object):
+class AccessTokenMixin:
     DEFAULT_TOKEN = 'abc123'
     JSON = 'application/json'
 

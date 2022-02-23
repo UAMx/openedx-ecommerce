@@ -1,4 +1,6 @@
 """Common settings and globals."""
+
+
 import datetime
 import os
 import platform
@@ -7,8 +9,14 @@ from os.path import abspath, basename, dirname, join, normpath
 from sys import path
 
 from django.utils.translation import ugettext_lazy as _
-from oscar import OSCAR_MAIN_TEMPLATE_DIR
 
+from ecommerce.core.constants import (
+    ENTERPRISE_COUPON_ADMIN_ROLE,
+    ORDER_MANAGER_ROLE,
+    STUDENT_SUPPORT_ADMIN_ROLE,
+    SYSTEM_ENTERPRISE_ADMIN_ROLE,
+    SYSTEM_ENTERPRISE_OPERATOR_ROLE
+)
 from ecommerce.settings._oscar import *
 
 # PATH CONFIGURATION
@@ -51,12 +59,13 @@ MANAGERS = ADMINS
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.',
-        'NAME': '',
-        'USER': '',
-        'PASSWORD': '',
-        'HOST': '',
+        'NAME': 'ecommerce',
+        'USER': 'ecomm001',
+        'PASSWORD': 'password',
+        'HOST': 'localhost',
         'PORT': '',
         'ATOMIC_REQUESTS': True,
+        'CONN_MAX_AGE': 60,
     }
 }
 # END DATABASE CONFIGURATION
@@ -64,7 +73,7 @@ DATABASES = {
 
 # GENERAL CONFIGURATION
 # See: https://docs.djangoproject.com/en/dev/ref/settings/#time-zone
-TIME_ZONE = 'America/New_York'
+TIME_ZONE = 'UTC'
 
 # See: https://docs.djangoproject.com/en/dev/ref/settings/#language-code
 # http://www.i18nguy.com/unicode/language-identifiers.html
@@ -169,9 +178,6 @@ TEMPLATES = [
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
         'DIRS': (
             normpath(join(DJANGO_ROOT, 'templates')),
-            # Templates which override default Oscar templates
-            normpath(join(DJANGO_ROOT, 'templates/oscar')),
-            OSCAR_MAIN_TEMPLATE_DIR,
         ),
         'OPTIONS': {
             'loaders': [
@@ -190,7 +196,6 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'django.template.context_processors.request',
                 'oscar.apps.search.context_processors.search_form',
-                'oscar.apps.promotions.context_processors.promotions',
                 'oscar.apps.checkout.context_processors.checkout',
                 'oscar.apps.customer.notifications.context_processors.notifications',
                 'oscar.core.context_processors.metadata',
@@ -205,34 +210,35 @@ TEMPLATES = [
 
 
 # MIDDLEWARE CONFIGURATION
-# See: https://docs.djangoproject.com/en/dev/ref/settings/#middleware-classes
-MIDDLEWARE_CLASSES = (
+# See: https://docs.djangoproject.com/en/1.11/ref/settings/#middleware
+MIDDLEWARE = (
     'corsheaders.middleware.CorsMiddleware',
     'edx_django_utils.cache.middleware.RequestCacheMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.locale.LocaleMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'edx_rest_framework_extensions.auth.jwt.middleware.JwtRedirectToLoginIfUnauthenticatedMiddleware',
     'edx_rest_framework_extensions.auth.jwt.middleware.JwtAuthCookieMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.auth.middleware.SessionAuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.contrib.sites.middleware.CurrentSiteMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'edx_rest_framework_extensions.auth.jwt.middleware.EnsureJWTAuthSettingsMiddleware',
     'waffle.middleware.WaffleMiddleware',
+    'ecommerce.extensions.analytics.middleware.TrackingMiddleware',
     # NOTE: The overridden BasketMiddleware relies on request.site. This middleware
     # MUST appear AFTER CurrentSiteMiddleware.
-    'ecommerce.extensions.analytics.middleware.TrackingMiddleware',
     'ecommerce.extensions.basket.middleware.BasketMiddleware',
     'django.contrib.flatpages.middleware.FlatpageFallbackMiddleware',
     'social_django.middleware.SocialAuthExceptionMiddleware',
+    'simple_history.middleware.HistoryRequestMiddleware',
     'threadlocals.middleware.ThreadLocalMiddleware',
     'ecommerce.theming.middleware.CurrentSiteThemeMiddleware',
     'ecommerce.theming.middleware.ThemePreviewMiddleware',
     'edx_django_utils.cache.middleware.TieredCacheMiddleware',
     'edx_rest_framework_extensions.middleware.RequestMetricsMiddleware',
     'edx_rest_framework_extensions.auth.jwt.middleware.EnsureJWTAuthSettingsMiddleware',
+    'crum.CurrentRequestUserMiddleware',
 )
 # END MIDDLEWARE CONFIGURATION
 
@@ -276,6 +282,7 @@ DJANGO_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.flatpages',
     'django.contrib.humanize',
+    'django.contrib.messages',
     'django.contrib.sessions',
     'django.contrib.sites',
     'django.contrib.staticfiles',
@@ -289,7 +296,12 @@ DJANGO_APPS = [
     'solo',
     'social_django',
     'rest_framework_swagger',
+    'rest_framework_datatables',
     'django_sites_extensions',
+    # edx-drf-extensions
+    'csrf.apps.CsrfAppConfig',  # Enables frontend apps to retrieve CSRF tokens.
+    'rules.apps.AutodiscoverRulesConfig',
+    'xss_utils',
 ]
 
 # Apps specific to this project go here.
@@ -298,13 +310,13 @@ LOCAL_APPS = [
     'ecommerce.coupons',
     'ecommerce.courses',
     'ecommerce.invoice',
+    'ecommerce.bff',
     'ecommerce.programs',
     'ecommerce.referrals',
     'ecommerce.theming',
     'ecommerce.sailthru',
     'ecommerce.enterprise',
     'ecommerce.management',
-    'ecommerce.journals',  # TODO: journals dependency
 ]
 
 # See: https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
@@ -377,6 +389,11 @@ LOGGING = {
             'propagate': True,
             'level': 'WARNING'
         },
+        'rules': {
+            'handlers': ['console', 'local'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
         '': {
             'handlers': ['console', 'local'],
             'level': 'DEBUG',
@@ -384,6 +401,9 @@ LOGGING = {
         },
     }
 }
+
+LOGGING_ROOT_OVERRIDES = {}
+LOGGING_SUBSECTION_OVERRIDES = {}
 # END LOGGING CONFIGURATION
 
 
@@ -403,24 +423,41 @@ AUTH_USER_MODEL = 'core.User'
 
 # See: http://getblimp.github.io/django-rest-framework-jwt/#additional-settings
 JWT_AUTH = {
-    'JWT_SECRET_KEY': None,
+    'JWT_SECRET_KEY': 'SET-ME-PLEASE',
     'JWT_ALGORITHM': 'HS256',
     'JWT_AUTH_COOKIE': 'edx-jwt-cookie',
     'JWT_VERIFY_EXPIRATION': True,
     'JWT_LEEWAY': 1,
     'JWT_DECODE_HANDLER': 'ecommerce.extensions.api.handlers.jwt_decode_handler',
     # These settings are NOT part of DRF-JWT's defaults.
-    'JWT_ISSUERS': (),
+    'JWT_ISSUERS': [
+        {
+            'AUDIENCE': 'SET-ME-PLEASE',
+            'ISSUER': 'http://127.0.0.1:8000/oauth2',
+            'SECRET_KEY': 'SET-ME-PLEASE'
+        },
+        {
+            'AUDIENCE': 'SET-ME-PLEASE',
+            'ISSUER': 'ecommerce_worker',
+            'SECRET_KEY': 'SET-ME-PLEASE'
+        }
+    ],
     # NOTE (CCB): This is temporarily set to False until we decide what values are acceptable.
     'JWT_VERIFY_AUDIENCE': False,
     'JWT_PUBLIC_SIGNING_JWK_SET': None,
+    'JWT_AUTH_COOKIE_HEADER_PAYLOAD': 'edx-jwt-cookie-header-payload',
+    'JWT_AUTH_COOKIE_SIGNATURE': 'edx-jwt-cookie-signature',
+    'JWT_AUTH_HEADER_PREFIX': 'JWT',
 }
 
 # Service user for worker processes.
 ECOMMERCE_SERVICE_WORKER_USERNAME = 'ecommerce_worker'
 
+# Worker user used by prospectus to query ecommerce
+PROSPECTUS_WORKER_USERNAME = 'prospectus_worker'
+
 # Used to access the Enrollment API. Set this to the same value used by the LMS.
-EDX_API_KEY = None
+EDX_API_KEY = 'PUT_YOUR_API_KEY_HERE'
 
 # Enables a special view that, when accessed, creates and logs in a new user.
 # This should NOT be enabled for production deployments.
@@ -430,18 +467,16 @@ ENABLE_AUTO_AUTH = False
 # If it were not set, we would be unable to automatically remove all auto-auth users.
 AUTO_AUTH_USERNAME_PREFIX = 'AUTO_AUTH_'
 
-AUTHENTICATION_BACKENDS = ('auth_backends.backends.EdXOpenIdConnect',) + AUTHENTICATION_BACKENDS
+AUTHENTICATION_BACKENDS = ('auth_backends.backends.EdXOAuth2',) + AUTHENTICATION_BACKENDS
 
 SOCIAL_AUTH_STRATEGY = 'ecommerce.social_auth.strategies.CurrentSiteDjangoStrategy'
 
-# Set these to the correct values for your OAuth2/OpenID Connect provider
-SOCIAL_AUTH_EDX_OIDC_KEY = None
-SOCIAL_AUTH_EDX_OIDC_SECRET = None
-SOCIAL_AUTH_EDX_OIDC_URL_ROOT = None
-SOCIAL_AUTH_EDX_OIDC_LOGOUT_URL = None
-
-# This value should be the same as SOCIAL_AUTH_EDX_OIDC_SECRET
-SOCIAL_AUTH_EDX_OIDC_ID_TOKEN_DECRYPTION_KEY = SOCIAL_AUTH_EDX_OIDC_SECRET
+# Set these to the correct values for your OAuth2 provider
+SOCIAL_AUTH_EDX_OAUTH2_KEY = "ecommerce-sso-key"
+SOCIAL_AUTH_EDX_OAUTH2_SECRET = "ecommerce-sso-secret"
+SOCIAL_AUTH_EDX_OAUTH2_ISSUER = "http://127.0.0.1:8000"
+SOCIAL_AUTH_EDX_OAUTH2_URL_ROOT = "http://127.0.0.1:8000"
+SOCIAL_AUTH_EDX_OAUTH2_LOGOUT_URL = "http://127.0.0.1:8000/logout"
 
 # Redirect successfully authenticated users to the Oscar dashboard.
 LOGIN_REDIRECT_URL = 'dashboard:index'
@@ -464,7 +499,7 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ),
     'DEFAULT_THROTTLE_RATES': {
-        'user': '50/minute',
+        'user': '75/minute',
     },
     'TEST_REQUEST_DEFAULT_FORMAT': 'json',
     'TEST_REQUEST_RENDERER_CLASSES': (
@@ -472,9 +507,13 @@ REST_FRAMEWORK = {
     ),
     'DEFAULT_RENDERER_CLASSES': (
         'rest_framework.renderers.JSONRenderer',
-        'rest_framework.renderers.BrowsableAPIRenderer',
+        'rest_framework_datatables.renderers.DatatablesRenderer',
         'rest_framework_csv.renderers.CSVRenderer',
     ),
+    'DEFAULT_FILTER_BACKENDS': (
+        'rest_framework_datatables.filters.DatatablesFilterBackend',
+    ),
+    'DEFAULT_SCHEMA_CLASS': 'rest_framework.schemas.coreapi.AutoSchema'
 }
 # END DJANGO REST FRAMEWORK
 
@@ -489,7 +528,8 @@ TEST_RUNNER = 'django.test.runner.DiscoverRunner'
 # Detailed information at: https://docs.djangoproject.com/en/dev/ref/settings/
 SESSION_COOKIE_NAME = 'ecommerce_sessionid'
 CSRF_COOKIE_NAME = 'ecommerce_csrftoken'
-LANGUAGE_COOKIE_NAME = 'ecommerce_language'
+CSRF_COOKIE_SECURE = False
+LANGUAGE_COOKIE_NAME = 'openedx-language-preference'
 SESSION_COOKIE_SECURE = False
 # END COOKIE CONFIGURATION
 
@@ -498,7 +538,7 @@ SESSION_COOKIE_SECURE = False
 # Default broker URL. See http://celery.readthedocs.io/en/latest/userguide/configuration.html#broker-url.
 # In order for tasks to be visible to the ecommerce worker, this must match the value of BROKER_URL
 # configured for the ecommerce worker!
-BROKER_URL = None
+BROKER_URL = 'redis://:celery@127.0.0.1:6379'
 
 # Disable connection pooling. Connections may be severed by load balancers.
 # This forces the application to connect explicitly to the broker each time
@@ -518,11 +558,18 @@ CELERY_IMPORTS = (
     'ecommerce_worker.fulfillment.v1.tasks',
 )
 
+DEFAULT_PRIORITY_QUEUE = 'ecommerce.default'
+CELERY_DEFAULT_EXCHANGE = 'ecommerce'
+CELERY_DEFAULT_ROUTING_KEY = 'ecommerce'
+CELERY_DEFAULT_QUEUE = DEFAULT_PRIORITY_QUEUE
 CELERY_ROUTES = {
-    'ecommerce_worker.fulfillment.v1.tasks.fulfill_order': {'queue': 'fulfillment'},
-    'ecommerce_worker.sailthru.v1.tasks.update_course_enrollment': {'queue': 'email_marketing'},
-    'ecommerce_worker.sailthru.v1.tasks.send_course_refund_email': {'queue': 'email_marketing'},
-    'ecommerce_worker.sailthru.v1.tasks.send_offer_assignment_email': {'queue': 'email_marketing'},
+    'ecommerce_worker.fulfillment.v1.tasks.fulfill_order': {'queue': 'ecommerce.fulfillment'},
+    'ecommerce_worker.sailthru.v1.tasks.update_course_enrollment': {'queue': 'ecommerce.email_marketing'},
+    'ecommerce_worker.sailthru.v1.tasks.send_course_refund_email': {'queue': 'ecommerce.email_marketing'},
+    'ecommerce_worker.sailthru.v1.tasks.send_offer_assignment_email': {'queue': 'ecommerce.email_marketing'},
+    'ecommerce_worker.sailthru.v1.tasks.send_offer_update_email': {'queue': 'ecommerce.email_marketing'},
+    'ecommerce_worker.sailthru.v1.tasks.send_offer_usage_email': {'queue': 'ecommerce.email_marketing'},
+    'ecommerce_worker.sailthru.v1.tasks.send_code_assignment_nudge_email': {'queue': 'ecommerce.email_marketing'},
 }
 
 # Prevent Celery from removing handlers on the root logger. Allows setting custom logging handlers.
@@ -532,6 +579,12 @@ CELERYD_HIJACK_ROOT_LOGGER = False
 # Execute tasks locally (synchronously) instead of sending them to the queue.
 # See http://celery.readthedocs.io/en/latest/userguide/configuration.html#task-always-eager.
 CELERY_ALWAYS_EAGER = False
+
+# Specify allowed serializers that are consistent with Celery 3 defaults
+CELERY_TASK_SERIALIZER = 'pickle'
+CELERY_RESULT_SERIALIZER = 'pickle'
+CELERY_EVENT_SERIALIZER = 'json'
+CELERY_ACCEPT_CONTENT = ['json', 'pickle', 'yaml']
 # END CELERY
 
 
@@ -547,7 +600,7 @@ COURSE_CATALOG_API_URL = 'http://localhost:8008/api/v1/'
 BLACK_LIST_COUPON_COURSE_MODES = [u'audit', u'honor']
 
 # Theme settings
-# enable or disbale comprehensive theming
+# enable or disable comprehensive theming
 ENABLE_COMPREHENSIVE_THEMING = True
 
 # name for waffle switch to use for disabling theming on runtime.
@@ -576,29 +629,49 @@ EDX_DRF_EXTENSIONS = {
         'email': 'email',
         'full_name': 'full_name',
         'tracking_context': 'tracking_context',
+        'user_id': 'lms_user_id',
     },
+    'JWT_PAYLOAD_MERGEABLE_USER_ATTRIBUTES': (
+        'tracking_context',
+    ),
+    'OAUTH2_USER_INFO_URL': 'http://127.0.0.1:8000/oauth2/user_info',
+    'ENABLE_SET_REQUEST_USER_FOR_JWT_COOKIE': True,
 }
 
 # Enrollment codes voucher end datetime used for setting the end dates for vouchers
 # created for the Enrollment code products.
 ENROLLMENT_CODE_EXIPRATION_DATE = datetime.datetime.now() + datetime.timedelta(weeks=520)
+ENROLLMENT_FULFILLMENT_TIMEOUT = 7
 
 # Affiliate cookie key
 AFFILIATE_COOKIE_KEY = 'affiliate_id'
 
 CRISPY_TEMPLATE_PACK = 'bootstrap3'
 
-# ENTERPRISE APP CONFIGURATION
+# ENTERPRISE CONFIGURATION
 # URL for Enterprise service
 ENTERPRISE_SERVICE_URL = 'http://localhost:8000/enterprise/'
 # Cache enterprise response from Enterprise API.
 ENTERPRISE_API_CACHE_TIMEOUT = 300  # Value is in seconds
 
+ENTERPRISE_CATALOG_SERVICE_URL = 'http://localhost:18160/'
+
+ENTERPRISE_LEARNER_PORTAL_HOSTNAME = os.environ.get('ENTERPRISE_LEARNER_PORTAL_HOSTNAME', 'localhost:8734')
+
 # Name for waffle switch to use for enabling enterprise features on runtime.
 ENABLE_ENTERPRISE_ON_RUNTIME_SWITCH = 'enable_enterprise_on_runtime'
 
 ENTERPRISE_CUSTOMER_COOKIE_NAME = 'enterprise_customer_uuid'
-# END ENTERPRISE APP CONFIGURATION
+
+ENTERPRISE_DATA_API_GROUP = 'enterprise_data_api_access'
+
+SYSTEM_TO_FEATURE_ROLE_MAPPING = {
+    SYSTEM_ENTERPRISE_ADMIN_ROLE: [ENTERPRISE_COUPON_ADMIN_ROLE],
+    SYSTEM_ENTERPRISE_OPERATOR_ROLE: [ENTERPRISE_COUPON_ADMIN_ROLE],
+    STUDENT_SUPPORT_ADMIN_ROLE: [ORDER_MANAGER_ROLE],
+}
+
+# END ENTERPRISE CONFIGURATION
 
 # DJANGO DEBUG TOOLBAR CONFIGURATION
 # http://django-debug-toolbar.readthedocs.org/en/latest/installation.html
@@ -607,7 +680,7 @@ if os.environ.get('ENABLE_DJANGO_TOOLBAR', False):
         'debug_toolbar',
     ]
 
-    MIDDLEWARE_CLASSES += (
+    MIDDLEWARE += (
         'debug_toolbar.middleware.DebugToolbarMiddleware',
     )
 
@@ -623,30 +696,140 @@ NEW_CODES_EMAIL_CONFIG = {
         This message is to inform you that a new order has been processed for your organization. Please visit the
         following page, in your Admin Dashboard, to find new codes ready for use.
 
-        https://portal.edx.org/{enterprise_slug}/admin/codes
+        https://portal.edx.org/{enterprise_slug}/admin/coupons
 
         Having trouble accessing your codes? Please contact edX Enterprise Support at customersuccess@edx.org.
         Thank you.
     '''
 }
 
-OFFER_ASSIGNMENT_EMAIL_DEFAULT_TEMPLATE = '''
-    Your learning manager has provided you with a new access code to take a course at edX.
-    You may redeem this code for {REDEMPTIONS_REMAINING} courses.
+OFFER_ASSIGNMENT_EMAIL_TEMPLATE = '''
+You may redeem this code for {REDEMPTIONS_REMAINING} course(s).
 
-    edX login: {USER_EMAIL}
-    Enrollment url: {ENROLLMENT_URL}
-    Access Code: {CODE}
-    Expiration date: {EXPIRATION_DATE}
-
-    You may go directly to the Enrollment URL to view courses that are available for this code
-    or you can insert the access code at check out under "coupon code" for applicable courses.
-
-    For any questions, please reach out to your Learning Manager.
+edX Login: {USER_EMAIL}
+Access Code: {CODE}
+Expiration Date: {EXPIRATION_DATE}
 '''
-OFFER_ASSIGNMENT_EMAIL_DEFAULT_SUBJECT = 'New edX course assignment'
 
-#SAILTHRU settings
-SAILTHRU_KEY = None
-SAILTHRU_SECRET = None
+OFFER_REVOKE_EMAIL_TEMPLATE = '''
+Your Learning Manager has revoked access code {CODE} and it is no longer assigned to your edX account {USER_EMAIL}.
+'''
 
+OFFER_REMINDER_EMAIL_TEMPLATE = '''
+You have redeemed this code {REDEEMED_OFFER_COUNT} time(s) out of {TOTAL_OFFER_COUNT} available course redemptions.
+
+edX Login: {USER_EMAIL}
+Access Code: {CODE}
+Expiration Date: {EXPIRATION_DATE}
+'''
+
+OFFER_ASSIGNMEN_EMAIL_TEMPLATE_BODY_MAP = {
+    'assign': OFFER_ASSIGNMENT_EMAIL_TEMPLATE,
+    'revoke': OFFER_REVOKE_EMAIL_TEMPLATE,
+    'remind': OFFER_REMINDER_EMAIL_TEMPLATE,
+}
+
+# SAILTHRU settings
+SAILTHRU_KEY = 'sailthru key here'
+SAILTHRU_SECRET = 'sailthru secret here'
+
+USERNAME_REPLACEMENT_WORKER = "replace with valid username"
+
+CORS_ALLOW_CREDENTIALS = False
+ECOMMERCE_URL_ROOT = "http://localhost:8002"
+OSCAR_FROM_EMAIL = 'oscar@example.com'
+OSCAR_SLUG_ALLOW_UNICODE = True
+PLATFORM_NAME = 'Your Platform Name Here'
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+SOCIAL_AUTH_REDIRECT_IS_HTTPS = False
+
+CORS_ORIGIN_WHITELIST = []
+CORS_URLS_REGEX = ''
+
+ECOMMERCE_PAYMENT_PROCESSOR_CONFIG = {
+    'edx': {
+        'cybersource': {
+            'access_key': 'SET-ME-PLEASE',
+            'apple_pay_country_code': 'US',
+            'apple_pay_merchant_id_certificate_path': '/edx/etc/ssl/apple_pay_merchant.pem',
+            'apple_pay_merchant_id_domain_association': 'This value should also be in private configuration. '
+                                                        'It, too,\nwill span multiple lines.',
+            'apple_pay_merchant_identifier': 'merchant.com.example',
+            'cancel_page_url': '/checkout/cancel-checkout/',
+            'merchant_id': 'SET-ME-PLEASE',
+            'payment_page_url': 'https://testsecureacceptance.cybersource.com/pay',
+            'profile_id': 'SET-ME-PLEASE',
+            'receipt_page_url': '/checkout/receipt/',
+            'secret_key':  'SET-ME-PLEASE',
+            'send_level_2_3_details': True,
+            'soap_api_url': 'https://ics2wstest.ic3.com/commerce/1.x/transactionProcessor/'
+                            'CyberSourceTransaction_1.140.wsdl',
+            'sop_access_key': 'SET-ME-PLEASE',
+            'sop_payment_page_url': 'https://testsecureacceptance.cybersource.com/silent/pay',
+            'sop_profile_id': 'SET-ME-PLEASE',
+            'sop_secret_key': 'SET-ME-PLEASE',
+            'transaction_key': 'SET-ME-PLEASE',
+            'flex_shared_secret_key_id': 'SET-ME-PLEASE',
+            'flex_shared_secret_key': 'SET-ME-PLEASE',
+        },
+        'cybersource-rest': {
+            'access_key': 'SET-ME-PLEASE',
+            'apple_pay_country_code': 'US',
+            'apple_pay_merchant_id_certificate_path': '/edx/etc/ssl/apple_pay_merchant.pem',
+            'apple_pay_merchant_id_domain_association': 'This value should also be in private configuration. '
+                                                        'It, too,\nwill span multiple lines.',
+            'apple_pay_merchant_identifier': 'merchant.com.example',
+            'cancel_page_url': '/checkout/cancel-checkout/',
+            'merchant_id': 'SET-ME-PLEASE',
+            'payment_page_url': 'https://testsecureacceptance.cybersource.com/pay',
+            'profile_id': 'SET-ME-PLEASE',
+            'receipt_page_url': '/checkout/receipt/',
+            'secret_key':  'SET-ME-PLEASE',
+            'send_level_2_3_details': True,
+            'soap_api_url': 'https://ics2wstest.ic3.com/commerce/1.x/transactionProcessor/'
+                            'CyberSourceTransaction_1.140.wsdl',
+            'sop_access_key': 'SET-ME-PLEASE',
+            'sop_payment_page_url': 'https://testsecureacceptance.cybersource.com/silent/pay',
+            'sop_profile_id': 'SET-ME-PLEASE',
+            'sop_secret_key': 'SET-ME-PLEASE',
+            'transaction_key': 'SET-ME-PLEASE',
+            'flex_shared_secret_key_id': 'SET-ME-PLEASE',
+            'flex_shared_secret_key': 'SET-ME-PLEASE',
+        },
+        'paypal': {
+            'cancel_checkout_path': '/checkout/cancel-checkout/',
+            'client_id': 'SET-ME-PLEASE',
+            'client_secret': 'SET-ME-PLEASE',
+            'error_url': '/checkout/error/',
+            'mode': 'sandbox',
+            'receipt_url': '/checkout/receipt/'
+        }
+    }
+}
+MEDIA_STORAGE_BACKEND = {
+    'DEFAULT_FILE_STORAGE': 'django.core.files.storage.FileSystemStorage',
+    'MEDIA_ROOT': MEDIA_ROOT,
+    'MEDIA_URL': MEDIA_URL
+}
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+    }
+}
+BACKEND_SERVICE_EDX_OAUTH2_KEY = "ecommerce-backend-service-key"
+BACKEND_SERVICE_EDX_OAUTH2_SECRET = "ecommerce-backend-service-secret"
+BACKEND_SERVICE_EDX_OAUTH2_PROVIDER_URL = "http://127.0.0.1:8000/oauth2"
+EXTRA_APPS = []
+API_ROOT = None
+
+# Needed to link to the payment micro-frontend
+PAYMENT_MICROFRONTEND_URL = None
+
+# For Enterprise purchases to send purchase information to HubSpot for marketing leads
+HUBSPOT_FORMS_API_URI = "SET-ME-PLEASE"
+HUBSPOT_PORTAL_ID = "SET-ME-PLEASE"
+HUBSPOT_SALES_LEAD_FORM_GUID = "SET-ME-PLEASE"
+
+# To check government purchase restriction lists
+SDN_CHECK_API_URL ="https://api.trade.gov/gateway/v1/consolidated_screening_list/search"
+SDN_CHECK_API_KEY = "sdn search key here"

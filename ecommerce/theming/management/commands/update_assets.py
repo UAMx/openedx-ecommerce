@@ -1,9 +1,6 @@
 """
 Managements for asset compilation and collection.
 """
-
-from __future__ import unicode_literals
-
 import datetime
 import logging
 
@@ -117,7 +114,7 @@ class Command(BaseCommand):
                 raise CommandError("Invalid themes value, It must either be 'all' or 'no' or list of themes.")
         # Raise error if any of the given theme name is invalid
         # (theme name would be invalid if it does not exist in themes directory)
-        elif (not set(given_themes).issubset(available_themes.keys())) and is_comprehensive_theming_enabled():
+        elif (not set(given_themes).issubset(list(available_themes.keys()))) and is_comprehensive_theming_enabled():
             raise CommandError(
                 "Given themes '{invalid_themes}' do not exist inside themes directory '{themes_dir}'".format(
                     invalid_themes=", ".join(set(given_themes) - set(available_themes.keys())),

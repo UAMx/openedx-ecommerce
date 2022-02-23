@@ -1,4 +1,21 @@
 <div class="row">
+    <% if(editing) {%>
+    <div class="fields col-md-12">
+        <div class="form-group">
+            <label><%= gettext('Status') %> *</label>
+            <div class="Status row">
+                <div class="form-inline col-md-3">
+                    <input id="active" type="radio" name="inactive" value="active">
+                    <label for="active" class="normal-font-weight"><%= gettext('Active') %></label>
+                </div>
+                <div class="form-inline col-md-3">
+                    <input id="inactive" type="radio" name="inactive" value="inactive">
+                    <label for="inactive" class="normal-font-weight"><%= gettext('Inactive') %></label>
+                </div>
+            </div>
+        </div>
+    </div>
+    <%}%>
     <div class="fields col-md-6">
         <div class="form-group">
             <label for="title"><%= gettext('Coupon Name') %> *</label>
@@ -49,7 +66,7 @@
 
         <div class="form-group">
             <label for="quantity"><%= gettext('Number of Codes') %> *</label>
-            <input id="quantity" type="number" step="1" class="form-control non-editable" name="quantity" value="1" min="1" max="1000">
+            <input id="quantity" type="number" step="1" class="form-control non-editable" name="quantity" value="1" min="1" max="5000">
             <p class="help-block"></p>
         </div>
 
@@ -57,6 +74,29 @@
             <label for="max-uses"><%= gettext('Maximum Number of Uses') %></label>
             <input id="max-uses" type="number" step="1" class="form-control" name="max_uses" value="1" min="1" placeholder="Defaults to 10000">
             <p class="help-block"></p>
+        </div>
+
+        <div class="form-group">
+            <label for="contract-discount-value"><%= gettext('Discount on contract') %> *</label>
+            <div class="input-group">
+                <div class="contract-discount-addon input-group-addon"></div>
+                <input id="contract-discount-value" type="number" step="0.01" class="form-control contract-discount-value" name="contract_discount_value">
+            </div>
+            <div class="form-inline contract-discount-type">
+                <input id="contract-discount-percent" type="radio" name="contract_discount_type" value="Percentage">
+                <label for="contract-discount-percent" class="normal-font-weight"><%= gettext('Percent') %></label>
+                <input id="contract-discount-fixed" type="radio" name="contract_discount_type" value="Absolute">
+                <label for="contract-discount-fixed" class="normal-font-weight"><%= gettext('Fixed ($USD)') %></label>
+            </div>
+            <p class="help-block"></p>
+        </div>
+
+        <div class="form-group">
+            <label for="prepaid-invoice-amount"><%= gettext('Prepaid invoice amount') %> *</label>
+            <div class="input-group">
+                <div class="prepaid-invoice-amount-addon input-group-addon"></div>
+                <input id="prepaid-invoice-amount" type="number" step="0.01" class="form-control prepaid-invoice-amount" name="prepaid_invoice_amount">
+            </div>
         </div>
 
         <div class="form-group">
@@ -154,12 +194,13 @@
     <div class="fields col-md-6">
         <div class="form-group enterprise-customer">
             <label for="enterprise-customer"><%= gettext('Enterprise Customer:') %></label>
-            <select id="enterprise-customer" class="form-control" name="enterprise_customer"></select>
+            <input id="enterprise-customer" class="form-control" name="enterprise_customer" placeholder="<%- gettext('Enterprise Customer Name') %>"/>
             <p class="help-block"></p>
         </div>
         <div class="form-group enterprise-customer-catalog">
             <label for="enterprise-customer-catalog"><%= gettext('Enterprise Customer Catalog') %></label>
-            <input id="enterprise-customer-catalog" type="text" class="form-control" name="enterprise_customer_catalog">
+            <select id="enterprise-customer-catalog" class="form-control" name="enterprise_customer_catalog" disabled></select>
+            <a id="enterprise-catalog-details" aria-label="View enterprise catalog details.">Enterprise Catalog Details</a>
             <p class="help-block"></p>
         </div>
         <div class="form-group email-domains">
@@ -177,10 +218,16 @@
             <input id="notify-email" class="form-control" type="text" name="notify_email">
             <p class="help-block"></p>
         </div>
+        <div class="form-group">
+            <label for="sales-force-id"><%= gettext('Salesforce Opportunity ID') %></label>
+            <input id="sales-force-id" class="form-control" type="text" name="sales_force_id">
+            <p class="help-block"></p>
+        </div>
     </div>
 </div>
 
 <div class="form-actions">
     <button type="submit" class="btn btn-primary"></button>
+    <button class="btn btn-primary submit-add-more"></button>
     <a id="cancel-button" class="btn btn-default" href="/enterprise/coupons/<% if(id){ print(id + '/'); } %>"><%= gettext('Cancel') %></a>
 </div>

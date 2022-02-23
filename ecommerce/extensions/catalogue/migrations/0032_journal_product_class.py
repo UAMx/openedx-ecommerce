@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
-# TODO: journals dependency
-from __future__ import unicode_literals
+
 
 from django.db import migrations
 from oscar.core.loading import get_model
 from oscar.core.utils import slugify
 
-from ecommerce.journals.constants import JOURNAL_PRODUCT_CLASS_NAME
-
+JOURNAL_PRODUCT_CLASS_NAME = 'Journal'
 Category = get_model("catalogue", "Category")
 Product = get_model('catalogue', 'Product')
 ProductAttribute = get_model("catalogue", "ProductAttribute")
@@ -17,23 +15,27 @@ JOURNAL_SLUG_NAME = slugify(JOURNAL_PRODUCT_CLASS_NAME)
 
 def create_product_class(apps, schema_editor):
     """ Create a journal product class """
+    for klass in (Category, Product, ProductClass, ProductAttribute):
+        klass.skip_history_when_saving = True
 
     # Create a new product class for journal
-    journal = ProductClass.objects.create(
+    journal = ProductClass(
         track_stock=False,
         requires_shipping=False,
         name=JOURNAL_PRODUCT_CLASS_NAME,
         slug=JOURNAL_SLUG_NAME
     )
+    journal.save()
 
     # Create product attributes for journal products
-    ProductAttribute.objects.create(
+    pa1 = ProductAttribute.objects.create(
         product_class=journal,
         name="UUID",
         code="UUID",
         type="text",
         required=True
     )
+    pa1.save()
 
     # Create a category for the journal
     Category.add_root(
@@ -46,6 +48,10 @@ def create_product_class(apps, schema_editor):
 
 def remove_product_class(apps, schema_editor):
     """ Reverse function. """
+    # ProductAttribute is required here for the cascading delete
+    for klass in (Category, Product, ProductClass, ProductAttribute):
+        klass.skip_history_when_saving = True
+
     Product.objects.filter(product_class=ProductClass.objects.get(name=JOURNAL_PRODUCT_CLASS_NAME)).delete()
     Category.objects.filter(slug=JOURNAL_SLUG_NAME).delete()
     ProductClass.objects.filter(name=JOURNAL_PRODUCT_CLASS_NAME).delete()

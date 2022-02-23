@@ -132,6 +132,15 @@ define([
 
                 cardType = CreditCardUtils.getCreditCardType(cardNumber);
 
+
+                // Number.isInteger() is not compatible with IE11, so polyfill is required. Polyfill taken from:
+                // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/isInteger
+                Number.isInteger = Number.isInteger || function(value) {
+                    return typeof value === 'number' &&
+                        isFinite(value) &&
+                        Math.floor(value) === value;
+                };
+
                 if (!CreditCardUtils.isValidCardNumber(cardNumber)) {
                     BasketPage.appendCardValidationErrorMsg(event, $number, gettext('Invalid card number'));
                 } else if (_.isUndefined(cardType) || !BasketPage.isCardTypeSupported(cardType.name)) {
@@ -194,35 +203,6 @@ define([
                 } else {
                     $('.card-type-icon').attr('src', '').addClass('hidden');
                 }
-            },
-
-            sdnCheck: function(event) {
-                var firstName = $('input[name=first_name]').val(),
-                    lastName = $('input[name=last_name]').val(),
-                    city = $('input[name=city]').val(),
-                    country = $('select[name=country]').val();
-
-                $.ajax({
-                    url: '/api/v2/sdn/search/',
-                    method: 'POST',
-                    contentType: 'application/json; charset=utf-8',
-                    dataType: 'json',
-                    headers: {
-                        'X-CSRFToken': Cookies.get('ecommerce_csrftoken')
-                    },
-                    data: JSON.stringify({
-                        name: _s.sprintf('%s %s', firstName, lastName),
-                        city: city,
-                        country: country
-                    }),
-                    async: false,
-                    success: function(data) {
-                        if (data.hits > 0) {
-                            event.preventDefault();
-                            Utils.redirect('/payment/sdn/failure/');
-                        }
-                    }
-                });
             },
 
             showVoucherForm: function() {
@@ -390,6 +370,12 @@ define([
                     BasketPage.hideVoucherForm();
                 });
 
+                $('#voucher_form').on('submit', function() {
+                    $('#apply-voucher-button').attr('disabled', true);
+                    $('#payment-button').attr('disabled', true);
+                    $('.payment-button[type=button]').attr('disabled', true);
+                });
+
                 $('select[name=country]').on('change', function() {
                     var country = $('select[name=country]').val(),
                         $inputDiv = $('#div_id_state .controls'),
@@ -400,6 +386,9 @@ define([
                                 American: 'AS',
                                 Arizona: 'AZ',
                                 Arkansas: 'AR',
+                                'Armed Forces Americas': 'AA',
+                                'Armed Forces Europe': 'AE',
+                                'Armed Forces Pacific': 'AP',
                                 California: 'CA',
                                 Colorado: 'CO',
                                 Connecticut: 'CT',
@@ -517,9 +506,6 @@ define([
                     }
                     BasketPage.cardInfoValidation(e);
                     BasketPage.cardHolderInfoValidation(e);
-                    if ($('input[name=sdn-check]').val() === 'enabled' && !$('.payment-form').data('has-error')) {
-                        BasketPage.sdnCheck(e);
-                    }
                 });
 
                 // NOTE: We only include buttons that have a data-processor-name attribute because we don't want to
@@ -529,10 +515,15 @@ define([
                         deferred = new $.Deferred(),
                         promise = deferred.promise(),
                         paymentProcessor = $btn.data('processor-name'),
+                        discountJwt = $btn.closest('#paymentForm').find('input[name="discount_jwt"]'),
                         data = {
                             basket_id: basketId,
                             payment_processor: paymentProcessor
                         };
+
+                    if (discountJwt.length === 1) {
+                        data.discount_jwt = discountJwt.val();
+                    }
 
                     Utils.disableElementWhileRunning($btn, function() {
                         return promise;

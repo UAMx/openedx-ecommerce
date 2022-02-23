@@ -1,12 +1,15 @@
-import pytest
+
+
 import requests
 
 from e2e.config import ECOMMERCE_TEST_WEB_SECURITY
 from e2e.helpers import EcommerceHelpers
 
+import pytest  # isort:skip
+
 
 @pytest.mark.skipif(not ECOMMERCE_TEST_WEB_SECURITY, reason='security testing disabled')
-class TestWAF(object):
+class TestWAF:
     """
     Make some simple attacks against the E-Commerce server to test that we have a general WAF (web
     application firewall) in place. These services prevent some common web attacks in a generic way.

@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
 """Base class for payment processor implementation test classes."""
-from __future__ import unicode_literals
+
 
 import ddt
 from django.conf import settings
 from oscar.core.loading import get_model
-from oscar.test import factories
 
 from ecommerce.courses.tests.factories import CourseFactory
 from ecommerce.extensions.catalogue.tests.mixins import DiscoveryTestMixin
 from ecommerce.extensions.payment.tests.mixins import PaymentEventsMixin
 from ecommerce.extensions.refund.tests.mixins import RefundTestMixin
 from ecommerce.extensions.test.factories import create_basket
-from ecommerce.tests.factories import SiteConfigurationFactory
+from ecommerce.tests.factories import SiteConfigurationFactory, UserFactory
 
 Partner = get_model('partner', 'Partner')
 
@@ -36,7 +35,7 @@ class PaymentProcessorTestCaseMixin(RefundTestMixin, DiscoveryTestMixin, Payment
         self.product = self.course.create_or_update_seat(self.CERTIFICATE_TYPE, False, 20)
 
         self.processor = self.processor_class(self.site)  # pylint: disable=not-callable
-        self.basket = create_basket(site=self.site, owner=factories.UserFactory(), empty=True)
+        self.basket = create_basket(site=self.site, owner=UserFactory(), empty=True)
         self.basket.add_product(self.product)
 
     def test_configuration(self):
@@ -68,9 +67,9 @@ class PaymentProcessorTestCaseMixin(RefundTestMixin, DiscoveryTestMixin, Payment
         raise NotImplementedError
 
     def test_issue_credit(self):
-        """ Verify the payment processor responds appropriately to requests to issue credit. """
+        """ Verify the payment processor responds appropriately to requests to issue credit/refund. """
         raise NotImplementedError
 
     def test_issue_credit_error(self):
-        """ Verify the payment processor responds appropriately if the payment gateway cannot issue a credit. """
+        """ Verify the payment processor responds appropriately if the payment gateway cannot issue a credit/refund. """
         raise NotImplementedError

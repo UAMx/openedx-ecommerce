@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Unit tests of Invoice payment processor implementation."""
-from __future__ import unicode_literals
+
 
 import datetime
 
@@ -46,6 +46,7 @@ class InvoiceTests(PaymentProcessorTestCaseMixin, TestCase):
         """
         Tests that transaction parameters are always None
         """
+        # pylint: disable=assignment-from-none
         params = self.processor_class(self.site).get_transaction_parameters(self.basket)
         self.assertIsNone(None, params)
 
@@ -74,7 +75,7 @@ class InvoiceTests(PaymentProcessorTestCaseMixin, TestCase):
         self.assertEqual(invoice.business_client, business_client)
         serialized_invoice = InvoiceSerializer(invoice).data
         for data in invoice_data:
-            if data is 'payment_date':
+            if data == 'payment_date':
                 self.assertEqual(invoice.payment_date.isoformat(), invoice_data[data])
             else:
                 self.assertEqual(serialized_invoice[data], invoice_data[data])

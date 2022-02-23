@@ -1,4 +1,4 @@
-from __future__ import unicode_literals
+
 
 import abc
 from collections import namedtuple
@@ -14,9 +14,8 @@ HandledProcessorResponse = namedtuple('HandledProcessorResponse',
                                       ['transaction_id', 'total', 'currency', 'card_number', 'card_type'])
 
 
-class BasePaymentProcessor(object):  # pragma: no cover
+class BasePaymentProcessor(metaclass=abc.ABCMeta):  # pragma: no cover
     """Base payment processor class."""
-    __metaclass__ = abc.ABCMeta
 
     # NOTE: Ensure that, if passed to a Django template, Django does not attempt to instantiate this class
     # or its children. Doing so without a Site object will cause issues.
@@ -113,7 +112,7 @@ class BasePaymentProcessor(object):  # pragma: no cover
     @abc.abstractmethod
     def issue_credit(self, order_number, basket, reference_number, amount, currency):
         """
-        Issue a credit for the specified transaction.
+        Issue a credit/refund for the specified transaction.
 
         Arguments:
             order_number (str): Order number of the order being refunded.
@@ -136,10 +135,8 @@ class BasePaymentProcessor(object):  # pragma: no cover
         return waffle.switch_is_active(settings.PAYMENT_PROCESSOR_SWITCH_PREFIX + cls.NAME)
 
 
-class BaseClientSidePaymentProcessor(BasePaymentProcessor):  # pylint: disable=abstract-method
+class BaseClientSidePaymentProcessor(BasePaymentProcessor, metaclass=abc.ABCMeta):  # pylint: disable=abstract-method
     """ Base class for client-side payment processors. """
-
-    __metaclass__ = abc.ABCMeta
 
     def get_template_name(self):
         """ Returns the path of the template to be loaded for this payment processor.
@@ -150,7 +147,7 @@ class BaseClientSidePaymentProcessor(BasePaymentProcessor):  # pylint: disable=a
         return 'payment/{}.html'.format(self.NAME)
 
 
-class ApplePayMixin(object):
+class ApplePayMixin:
     @cached_property
     def apple_pay_merchant_id_domain_association(self):
         """ Returns the Apple Pay merchant domain association contents that will be served at

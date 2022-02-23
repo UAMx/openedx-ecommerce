@@ -1,5 +1,5 @@
 """ This command publish the courses to LMS."""
-from __future__ import unicode_literals
+
 
 import logging
 import os

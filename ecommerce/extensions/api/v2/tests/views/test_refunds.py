@@ -1,3 +1,5 @@
+
+
 import json
 
 import ddt
@@ -6,7 +8,10 @@ import mock
 from django.urls import reverse
 from oscar.core.loading import get_model
 from rest_framework import status
+from testfixtures import LogCapture
+from waffle.testutils import override_switch
 
+from ecommerce.core.constants import ALLOW_MISSING_LMS_USER_ID
 from ecommerce.extensions.api.serializers import RefundSerializer
 from ecommerce.extensions.api.tests.test_authentication import AccessTokenMixin
 from ecommerce.extensions.api.v2.tests.views import JSON_CONTENT_TYPE
@@ -22,6 +27,7 @@ Refund = get_model('refund', 'Refund')
 
 
 class RefundCreateViewTests(RefundTestMixin, AccessTokenMixin, JwtMixin, TestCase):
+    MODEL_LOGGER_NAME = 'ecommerce.core.models'
     path = reverse('api:v2:refunds:create')
 
     def setUp(self):
@@ -34,13 +40,13 @@ class RefundCreateViewTests(RefundTestMixin, AccessTokenMixin, JwtMixin, TestCas
     def assert_bad_request_response(self, response, detail):
         """ Assert the response has status code 406 and the appropriate detail message. """
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        data = json.loads(response.content)
+        data = response.json()
         self.assertEqual(data, {'detail': detail})
 
     def assert_ok_response(self, response):
         """ Assert the response has HTTP status 200 and no data. """
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(json.loads(response.content), [])
+        self.assertEqual(response.json(), [])
 
     def _get_data(self, username=None, course_id=None, order_number=None, entitlement_uuid=None):
         data = {}
@@ -151,10 +157,64 @@ class RefundCreateViewTests(RefundTestMixin, AccessTokenMixin, JwtMixin, TestCas
         refund = Refund.objects.latest()
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(json.loads(response.content), [refund.id])
+        self.assertEqual(response.json(), [refund.id])
         self.assert_refund_matches_order(refund, order)
 
         # A second call should result in no additional refunds being created
+        response = self.client.post(self.path, data, JSON_CONTENT_TYPE)
+        self.assert_ok_response(response)
+
+    def test_refund_lms_user_id(self):
+        """
+        View should create a refund when a staff user requests it on behalf of another user (who has an LMS user id).
+        """
+        self.client.logout()
+        staff_user = self.create_user(is_staff=True)
+        user_with_id = self.create_user()
+        self.client.login(username=staff_user.username, password=self.password)
+
+        data = self._get_data(user_with_id.username, self.course_id)
+        response = self.client.post(self.path, data, JSON_CONTENT_TYPE)
+        self.assert_ok_response(response)
+
+    def test_refund_missing_lms_user_id(self):
+        """
+        View should not create a refund when a staff user requests it on behalf of another user (who does not have an
+        LMS user id).
+        """
+        self.client.logout()
+        staff_user = self.create_user(is_staff=True)
+        user_without_id = self.create_user(lms_user_id=None)
+        self.client.login(username=staff_user.username, password=self.password)
+
+        data = self._get_data(user_without_id.username, self.course_id)
+        expected_logs = [
+            (
+                self.MODEL_LOGGER_NAME,
+                'ERROR',
+                'Could not find lms_user_id for user {}. Called from refund processing for user {} requested by {}'
+                .format(user_without_id.id, user_without_id.id, staff_user.id)
+            ),
+        ]
+
+        with LogCapture(self.MODEL_LOGGER_NAME) as log:
+            response = self.client.post(self.path, data, JSON_CONTENT_TYPE)
+            log.check_present(*expected_logs)
+            self.assert_bad_request_response(response,
+                                             'User {} does not have an LMS user id.'.format(user_without_id.id))
+
+    @override_switch(ALLOW_MISSING_LMS_USER_ID, active=True)
+    def test_refund_missing_lms_user_id_allow_missing(self):
+        """
+        View should create a refund even if the LMS user id is missing if the switch is on.
+        """
+        self.client.logout()
+        staff_user = self.create_user(is_staff=True)
+        user_without_id = self.create_user(lms_user_id=None)
+        self.client.login(username=staff_user.username, password=self.password)
+
+        data = self._get_data(user_without_id.username, self.course_id)
+
         response = self.client.post(self.path, data, JSON_CONTENT_TYPE)
         self.assert_ok_response(response)
 
@@ -172,7 +232,7 @@ class RefundCreateViewTests(RefundTestMixin, AccessTokenMixin, JwtMixin, TestCas
         refund = Refund.objects.latest()
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(json.loads(response.content), [refund.id])
+        self.assertEqual(response.json(), [refund.id])
         self.assert_refund_matches_order(refund, order)
 
         # A second call should result in no additional refunds being created

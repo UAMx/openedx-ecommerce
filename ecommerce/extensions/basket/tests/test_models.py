@@ -1,11 +1,12 @@
+
+
 import itertools
 
 import mock
+from analytics import Client
 from edx_django_utils.cache import DEFAULT_REQUEST_CACHE
 from oscar.core.loading import get_class, get_model
-from oscar.test import factories
 
-from analytics import Client
 from ecommerce.courses.tests.factories import CourseFactory
 from ecommerce.extensions.analytics.utils import parse_tracking_context, translate_basket_line_for_segment
 from ecommerce.extensions.api.v2.tests.views.mixins import CatalogMixin
@@ -13,14 +14,14 @@ from ecommerce.extensions.basket.constants import TEMPORARY_BASKET_CACHE_KEY
 from ecommerce.extensions.basket.models import Basket
 from ecommerce.extensions.basket.tests.mixins import BasketMixin
 from ecommerce.extensions.test.factories import create_basket
-from ecommerce.tests.factories import SiteConfigurationFactory
-from ecommerce.tests.testcases import TestCase
+from ecommerce.tests.factories import SiteConfigurationFactory, UserFactory
+from ecommerce.tests.testcases import TransactionTestCase
 
 Basket = get_model('basket', 'Basket')
 OrderNumberGenerator = get_class('order.utils', 'OrderNumberGenerator')
 
 
-class BasketTests(CatalogMixin, BasketMixin, TestCase):
+class BasketTests(CatalogMixin, BasketMixin, TransactionTestCase):
     def assert_basket_state(self, basket, status, user, site):
         """ Verify the given basket's properties. """
         self.assertEqual(basket.status, status)
@@ -43,11 +44,11 @@ class BasketTests(CatalogMixin, BasketMixin, TestCase):
             num_lines=basket.num_lines
         )
 
-        self.assertEqual(unicode(basket), expected)
+        self.assertEqual(str(basket), expected)
 
     def test_get_basket_without_existing_baskets(self):
         """ If the user has no existing baskets, the method should return a new one. """
-        user = factories.UserFactory()
+        user = UserFactory()
         self.assertEqual(user.baskets.count(), 0, 'A new user should not have any associated Baskets.')
 
         basket = Basket.get_basket(user, self.site)
@@ -67,7 +68,7 @@ class BasketTests(CatalogMixin, BasketMixin, TestCase):
 
     def test_get_basket_with_existing_baskets(self):
         """ If the user has existing baskets in editable states, the method should return a single merged basket. """
-        user = factories.UserFactory()
+        user = UserFactory()
 
         # Create baskets in a state that qualifies them for merging
         editable_baskets = []
@@ -110,7 +111,7 @@ class BasketTests(CatalogMixin, BasketMixin, TestCase):
 
     def test_create_basket(self):
         """ Verify the method creates a new basket. """
-        user = factories.UserFactory()
+        user = UserFactory()
         basket = Basket.create_basket(self.site, user)
         self.assertEqual(basket.site, self.site)
         self.assertEqual(basket.owner, user)

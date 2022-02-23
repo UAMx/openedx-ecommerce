@@ -1,8 +1,10 @@
 """HTTP endpoint for verifying the health of the ecommerce front-end."""
+
+
 import logging
 import uuid
 
-from auth_backends.views import EdxOpenIdConnectLogoutView
+from auth_backends.views import EdxOAuth2LogoutView
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model, login
 from django.contrib.auth.decorators import login_required
@@ -67,8 +69,8 @@ def health(_):
 
     if overall_status == Status.OK:
         return JsonResponse(data)
-    else:
-        return JsonResponse(data, status=503)
+
+    return JsonResponse(data, status=503)
 
 
 class AutoAuth(View):
@@ -76,6 +78,7 @@ class AutoAuth(View):
 
     If the ENABLE_AUTO_AUTH setting is not True, returns a 404.
     """
+    lms_user_id = 45654
 
     def get(self, request):
         if not getattr(settings, 'ENABLE_AUTO_AUTH', None):
@@ -85,7 +88,7 @@ class AutoAuth(View):
 
         # Create a new user with staff permissions
         username = password = username_prefix + uuid.uuid4().hex[0:20]
-        User.objects.create_superuser(username, email=None, password=password)
+        User.objects.create_superuser(username, email=None, password=password, lms_user_id=self.lms_user_id)
 
         # Log in the new user
         user = authenticate(username=username, password=password)
@@ -94,7 +97,7 @@ class AutoAuth(View):
         return redirect('/')
 
 
-class StaffOnlyMixin(object):
+class StaffOnlyMixin:
     """ Makes sure only staff users can access the view. """
 
     @method_decorator(login_required)
@@ -105,8 +108,8 @@ class StaffOnlyMixin(object):
         return super(StaffOnlyMixin, self).dispatch(request, *args, **kwargs)
 
 
-class LogoutView(EdxOpenIdConnectLogoutView):
+class LogoutView(EdxOAuth2LogoutView):
     """ Logout view that redirects the user to the LMS logout page. """
 
     def get_redirect_url(self, *args, **kwargs):
-        return self.request.site.siteconfiguration.build_lms_url('logout')
+        return self.request.site.siteconfiguration.oauth_settings['SOCIAL_AUTH_EDX_OAUTH2_LOGOUT_URL']

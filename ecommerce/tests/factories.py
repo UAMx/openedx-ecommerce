@@ -1,16 +1,18 @@
+
+
 import factory
 from django.contrib.sites.models import Site
 from factory.fuzzy import FuzzyText  # pylint: disable=ungrouped-imports
 from faker import Faker
 from oscar.core.loading import get_model
-from oscar.test.factories import StockRecordFactory as OscarStockRecordFactory
 from oscar.test.factories import ProductFactory
+from oscar.test.factories import StockRecordFactory as OscarStockRecordFactory
 
 from ecommerce.core.models import SiteConfiguration
 
 
 class PartnerFactory(factory.DjangoModelFactory):
-    class Meta(object):
+    class Meta:
         model = get_model('partner', 'Partner')
         django_get_or_create = ('name',)
 
@@ -19,7 +21,7 @@ class PartnerFactory(factory.DjangoModelFactory):
 
 
 class SiteFactory(factory.DjangoModelFactory):
-    class Meta(object):
+    class Meta:
         model = Site
 
     domain = FuzzyText(suffix='.fake')
@@ -27,7 +29,7 @@ class SiteFactory(factory.DjangoModelFactory):
 
 
 class SiteConfigurationFactory(factory.DjangoModelFactory):
-    class Meta(object):
+    class Meta:
         model = SiteConfiguration
 
     lms_url_root = factory.LazyAttribute(lambda obj: "http://lms.testserver.fake")
@@ -44,3 +46,18 @@ class SiteConfigurationFactory(factory.DjangoModelFactory):
 class StockRecordFactory(OscarStockRecordFactory):
     product = factory.SubFactory(ProductFactory)
     price_currency = 'USD'
+
+
+class UserFactory(factory.DjangoModelFactory):
+    class Meta:
+        model = get_model('core', 'User')
+
+    username = factory.Sequence(lambda n: 'ecommerce_test_user %d' % n)
+    email = factory.Sequence(lambda n: 'ecommerce_test_%s@example.com' % n)
+    first_name = 'Ecommerce'
+    last_name = 'User'
+    password = factory.PostGenerationMethodCall('set_password', 'somethingSecure')
+    is_active = True
+    is_superuser = False
+    is_staff = False
+    lms_user_id = 98789

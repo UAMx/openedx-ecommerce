@@ -1,7 +1,6 @@
 """
 Tests for theming middleware.
 """
-
 from django.urls import reverse
 
 from ecommerce.tests.testcases import TestCase

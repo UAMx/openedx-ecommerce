@@ -1,5 +1,5 @@
 """HTTP endpoints for interacting with baskets."""
-from __future__ import unicode_literals
+
 
 import logging
 import warnings
@@ -18,8 +18,8 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import DjangoModelPermissions, IsAuthenticated
 from rest_framework.response import Response
 
+from ecommerce.core.exceptions import MissingLmsUserIdException
 from ecommerce.core.utils import get_cache_key
-from ecommerce.enterprise.entitlements import get_entitlement_voucher
 from ecommerce.extensions.analytics.utils import audit_log
 from ecommerce.extensions.api import data as data_api
 from ecommerce.extensions.api import exceptions as api_exceptions
@@ -52,8 +52,8 @@ class BasketCreateView(EdxOrderPlacementMixin, generics.CreateAPIView):
     """
     permission_classes = (IsAuthenticated,)
 
-    def get_serializer(self):
-        pass
+    def get_serializer(self):  # pylint: disable=arguments-differ
+        return None
 
     # Disable atomicity for the view. Otherwise, we'd be unable to commit to the database
     # until the request had concluded; Django will refuse to commit when an atomic() block
@@ -159,7 +159,7 @@ class BasketCreateView(EdxOrderPlacementMixin, generics.CreateAPIView):
 
             requested_products = request.data.get('products')
             if requested_products:
-                is_multi_product_basket = True if len(requested_products) > 1 else False
+                is_multi_product_basket = len(requested_products) > 1
                 for requested_product in requested_products:
                     # Ensure the requested products exist
                     sku = requested_product.get('sku')
@@ -168,7 +168,7 @@ class BasketCreateView(EdxOrderPlacementMixin, generics.CreateAPIView):
                             product = data_api.get_product(sku)
                         except api_exceptions.ProductNotFoundError as error:
                             return self._report_bad_request(
-                                error.message,
+                                str(error),
                                 api_exceptions.PRODUCT_NOT_FOUND_USER_MESSAGE
                             )
                     else:
@@ -210,7 +210,7 @@ class BasketCreateView(EdxOrderPlacementMixin, generics.CreateAPIView):
                     payment_processor = get_processor_class_by_name(payment_processor_name)
                 except payment_exceptions.ProcessorNotFoundError as error:
                     return self._report_bad_request(
-                        error.message,
+                        str(error),
                         payment_exceptions.PROCESSOR_NOT_FOUND_USER_MESSAGE
                     )
             else:
@@ -221,7 +221,7 @@ class BasketCreateView(EdxOrderPlacementMixin, generics.CreateAPIView):
             except Exception as ex:  # pylint: disable=broad-except
                 basket.delete()
                 logger.exception('Failed to initiate checkout for Basket [%d]. The basket has been deleted.', basket_id)
-                return Response({'developer_message': ex.message}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                return Response({'developer_message': str(ex)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         else:
             # Return a serialized basket, if checkout was not requested.
             response_data = self._generate_basic_response(basket)
@@ -358,7 +358,19 @@ class BasketDestroyView(generics.DestroyAPIView):
 
 class BasketCalculateView(generics.GenericAPIView):
     permission_classes = (IsAuthenticated,)
+    throttle_classes = (ServiceUserThrottle,)
     MARKETING_USER = 'marketing_site_worker'
+
+    def _report_bad_request(self, developer_message, user_message):
+        """Log error and create a response containing conventional error messaging."""
+        logger.error(developer_message)
+        return Response(
+            {
+                'developer_message': developer_message,
+                'user_message': user_message
+            },
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
     def _calculate_temporary_basket_atomic(self, user, request, products, voucher, skus, code):
         response = None
@@ -368,6 +380,7 @@ class BasketCalculateView(generics.GenericAPIView):
             with transaction.atomic():
                 basket = Basket(owner=user, site=request.site)
                 basket.strategy = Selector().strategy(user=user, request=request)
+                bundle_id = request.GET.get('bundle')
 
                 for product in products:
                     basket.add_product(product, 1)
@@ -376,7 +389,7 @@ class BasketCalculateView(generics.GenericAPIView):
                     basket.vouchers.add(voucher)
 
                 # Calculate any discounts on the basket.
-                Applicator().apply(basket, user=user, request=request)
+                Applicator().apply(basket, user=user, request=request, bundle_id=bundle_id)
 
                 discounts = []
                 if basket.offer_discounts:
@@ -385,8 +398,8 @@ class BasketCalculateView(generics.GenericAPIView):
                     discounts.extend(basket.voucher_discounts)
 
                 response = {
-                    'total_incl_tax_excl_discounts': basket.total_incl_tax_excl_discounts,
-                    'total_incl_tax': basket.total_incl_tax,
+                    'total_incl_tax_excl_discounts': round(basket.total_incl_tax_excl_discounts, 2),
+                    'total_incl_tax': round(basket.total_incl_tax, 2),
                     'currency': basket.currency
                 }
                 raise api_exceptions.TemporaryBasketException
@@ -400,7 +413,7 @@ class BasketCalculateView(generics.GenericAPIView):
             raise
         return response
 
-    def get(self, request):
+    def get(self, request):  # pylint: disable=too-many-statements
         """ Calculate basket totals given a list of sku's
 
         Create a temporary basket add the sku's and apply an optional voucher code.
@@ -419,7 +432,11 @@ class BasketCalculateView(generics.GenericAPIView):
                     'total_incl_tax': basket.total_incl_tax,
                     'currency': basket.currency
                 }
-        """
+
+         Side effects:
+            If the basket owner does not have an LMS user id, tries to find it. If found, adds the id to the user and
+            saves the user. If the id cannot be found, writes custom metrics to record this fact.
+       """
         DEFAULT_REQUEST_CACHE.set(TEMPORARY_BASKET_CACHE_KEY, True)
 
         partner = get_partner_for_site(request)
@@ -438,10 +455,6 @@ class BasketCalculateView(generics.GenericAPIView):
         if not products:
             return HttpResponseBadRequest(_('Products with SKU(s) [{skus}] do not exist.').format(skus=', '.join(skus)))
 
-        # If there is only one product apply an Enterprise entitlement voucher
-        if not voucher and len(products) == 1:
-            voucher = get_entitlement_voucher(request, products[0])
-
         basket_owner = request.user
 
         requested_username = request.GET.get('username', default='')
@@ -452,7 +465,7 @@ class BasketCalculateView(generics.GenericAPIView):
         # validate query parameters
         if requested_username and is_anonymous:
             return HttpResponseBadRequest(_('Provide username or is_anonymous query param, but not both'))
-        elif not requested_username and not is_anonymous:
+        if not requested_username and not is_anonymous:
             logger.warning("Request to Basket Calculate must supply either username or is_anonymous query"
                            " param. Requesting user=%s. Future versions of this API will treat this "
                            "WARNING as an ERROR and raise an exception.", basket_owner.username)
@@ -483,21 +496,34 @@ class BasketCalculateView(generics.GenericAPIView):
         if use_default_basket:
             basket_owner = None
 
+        # If we have a basket owner, ensure they have an LMS user id
+        try:
+            if basket_owner:
+                called_from = u'calculation of basket total'
+                basket_owner.add_lms_user_id('ecommerce_missing_lms_user_id_calculate_basket_total', called_from)
+        except MissingLmsUserIdException:
+            return self._report_bad_request(
+                api_exceptions.LMS_USER_ID_NOT_FOUND_DEVELOPER_MESSAGE.format(user_id=basket_owner.id),
+                api_exceptions.LMS_USER_ID_NOT_FOUND_USER_MESSAGE
+            )
+
         cache_key = None
+        bundle_id = request.GET.get('bundle')
         if use_default_basket:
             # For an anonymous user we can directly get the cached price, because
             # there can't be any enrollments or entitlements.
+            # We want bundle_id to be in the cache_key, since calls without bundle_id will produce different results
             cache_key = get_cache_key(
-                site_comain=request.site,
+                site_domain=request.site,
                 resource_name='calculate',
-                skus=skus
+                skus=skus,
+                bundle_id=bundle_id
             )
             cached_response = TieredCache.get_cached_response(cache_key)
             if cached_response.is_found:
                 return Response(cached_response.value)
 
         response = self._calculate_temporary_basket_atomic(basket_owner, request, products, voucher, skus, code)
-
         if response and use_default_basket:
             TieredCache.set_all_tiers(cache_key, response, settings.ANONYMOUS_BASKET_CALCULATE_CACHE_TIMEOUT)
 

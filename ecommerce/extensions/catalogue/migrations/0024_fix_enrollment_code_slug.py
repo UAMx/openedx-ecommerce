@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
+
 
 from django.db import migrations
 from oscar.core.loading import get_model
@@ -12,6 +12,7 @@ RIGHT_SLUG = 'enrollment_code'
 
 def fix_enrollment_code_slug(apps, schema_editor):
     """Update the faulty product class."""
+    ProductClass.skip_history_when_saving = True
     try:
         product_class = ProductClass.objects.get(slug=WRONG_SLUG)
         product_class.slug = RIGHT_SLUG
@@ -21,6 +22,7 @@ def fix_enrollment_code_slug(apps, schema_editor):
 
 
 def revert_migration(apps, schema_editor):
+    ProductClass.skip_history_when_saving = True
     try:
         product_class = ProductClass.objects.get(slug=RIGHT_SLUG)
         product_class.slug = WRONG_SLUG

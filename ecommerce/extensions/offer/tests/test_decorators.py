@@ -1,11 +1,13 @@
+
+
 from mock import patch
 from oscar.test.factories import ConditionalOfferFactory, ConditionFactory
 from waffle.models import Switch
 
 from ecommerce.extensions.catalogue.tests.mixins import DiscoveryTestMixin
 from ecommerce.extensions.offer.decorators import check_condition_applicability
-from ecommerce.extensions.test.factories import UserFactory, create_basket
-from ecommerce.tests.factories import SiteConfigurationFactory
+from ecommerce.extensions.test.factories import create_basket
+from ecommerce.tests.factories import SiteConfigurationFactory, UserFactory
 from ecommerce.tests.testcases import TestCase
 
 

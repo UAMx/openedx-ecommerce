@@ -66,6 +66,11 @@ disable=
 # We can decide if names are invalid on our own
     invalid-name,
 
+# We use isort for import order, so we can ignore
+# the pylint import errors, since they conflict at times.
+    wrong-import-order,
+    ungrouped-imports,
+
 [REPORTS]
 
 # Set the output format. Available formats are text, parseable, colorized, msvs
@@ -208,7 +213,7 @@ additional-builtins=
 [IMPORTS]
 
 # Deprecated modules which should not be used, separated by a comma
-deprecated-modules=regsub,string,TERMIOS,Bastion,rexec
+deprecated-modules=regsub,TERMIOS,Bastion,rexec
 
 # Create a graph of every (i.e. internal and external) dependencies in the
 # given file (report RP0402 must not be disabled)

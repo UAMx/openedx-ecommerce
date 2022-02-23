@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """Broadly-useful mixins for use in automated tests."""
+
+
 import datetime
 import json
 import re
@@ -7,24 +9,29 @@ from decimal import Decimal
 
 import httpretty
 import jwt
+from crum import set_current_request
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.sites.models import Site
 from django.urls import reverse
 from django.utils.timezone import now
 from edx_django_utils.cache import TieredCache
+from edx_rest_framework_extensions.auth.jwt.cookies import jwt_cookie_name
+from edx_rest_framework_extensions.auth.jwt.tests.utils import generate_jwt_token, generate_unversioned_payload
 from mock import patch
 from oscar.core.loading import get_class, get_model
 from oscar.test import factories
 from oscar.test.utils import RequestFactory
 from social_django.models import UserSocialAuth
 from threadlocals.threadlocals import set_thread_variable
+from waffle.models import Flag
 
+from ecommerce.core.constants import ALL_ACCESS_CONTEXT, SYSTEM_ENTERPRISE_ADMIN_ROLE, SYSTEM_ENTERPRISE_OPERATOR_ROLE
 from ecommerce.core.url_utils import get_lms_url
 from ecommerce.courses.models import Course
 from ecommerce.courses.utils import mode_for_product
 from ecommerce.extensions.fulfillment.signals import SHIPPING_EVENT_NAME
-from ecommerce.tests.factories import SiteConfigurationFactory
+from ecommerce.tests.factories import SiteConfigurationFactory, UserFactory
 
 Applicator = get_class('offer.applicator', 'Applicator')
 Basket = get_model('basket', 'Basket')
@@ -42,17 +49,19 @@ Voucher = get_model('voucher', 'Voucher')
 CONTENT_TYPE = 'application/json'
 
 
-class UserMixin(object):
+class UserMixin:
     """Provides utility methods for creating and authenticating users in test cases."""
     access_token = 'test-access-token'
+    user_id = 'test-user-id'
     password = 'test'
+    lms_user_id = 12321
 
-    def create_user(self, **kwargs):
+    def create_user(self, lms_user_id=lms_user_id, **kwargs):
         """Create a user, with overrideable defaults."""
         not_provided = object()
         if kwargs.get('username', not_provided) is None:
             kwargs.pop('username')
-        return factories.UserFactory(password=self.password, **kwargs)
+        return UserFactory(password=self.password, lms_user_id=lms_user_id, **kwargs)
 
     def create_access_token(self, user, access_token=None):
         """
@@ -63,18 +72,38 @@ class UserMixin(object):
         access_token = access_token or self.access_token
         UserSocialAuth.objects.create(user=user, extra_data={'access_token': access_token})
 
+    def set_user_id_in_social_auth(self, user, user_id=None):
+        """
+        Sets the user_id in social auth for the specified user.
+
+        If no user_id value is supplied, the default (self.user_id) will be used.
+        """
+        user_id = user_id or self.user_id
+        UserSocialAuth.objects.create(user=user, extra_data={'user_id': user_id})
+
     def generate_jwt_token_header(self, user, secret=None):
         """Generate a valid JWT token header for authenticated requests."""
         secret = secret or settings.JWT_AUTH['JWT_SECRET_KEY']
+
+        # WARNING:
+        #   If any test that uses this function fails with an error about a missing 'exp' or 'iat' or
+        #     'is_restricted' claim in the payload, then do one of the following:
+        #
+        #   1. If Ecommerce's JWT_DECODE_HANDLER setting still points to a custom decoder inside Ecommerce,
+        #      then a bug was introduced and the setting is no longer respected. If this is the case, do not
+        #      add the claims to this test, and instead fix the bug. Or,
+        #   2. If Ecommerce is being updated to no longer use a custom JWT_DECODE_HANDLER from Ecommerce, but is
+        #      instead using the decode handler directly from edx-drf-extensions, any required claims can be
+        #      added to this test and this warning can be removed.
         payload = {
             'username': user.username,
             'email': user.email,
             'iss': settings.JWT_AUTH['JWT_ISSUERS'][0]['ISSUER']
         }
-        return "JWT {token}".format(token=jwt.encode(payload, secret))
+        return "JWT {token}".format(token=jwt.encode(payload, secret).decode('utf-8'))
 
 
-class ThrottlingMixin(object):
+class ThrottlingMixin:
     """Provides utility methods for test cases validating the behavior of rate-limited endpoints."""
 
     def setUp(self):
@@ -84,7 +113,7 @@ class ThrottlingMixin(object):
         self.addCleanup(TieredCache.dangerous_clear_all_tiers)
 
 
-class JwtMixin(object):
+class JwtMixin:
     """ Mixin with JWT-related helper functions. """
     JWT_SECRET_KEY = settings.JWT_AUTH['JWT_SECRET_KEY']
     issuer = settings.JWT_AUTH['JWT_ISSUERS'][0]['ISSUER']
@@ -92,8 +121,24 @@ class JwtMixin(object):
     def generate_token(self, payload, secret=None):
         """Generate a JWT token with the provided payload."""
         secret = secret or self.JWT_SECRET_KEY
-        token = jwt.encode(dict(payload, iss=self.issuer), secret)
+        token = jwt.encode(dict(payload, iss=self.issuer), secret).decode('utf-8')
         return token
+
+    def set_jwt_cookie(self, system_wide_role=SYSTEM_ENTERPRISE_ADMIN_ROLE, context='some_context'):
+        """
+        Set jwt token in cookies
+        """
+        role_data = '{system_wide_role}'.format(system_wide_role=system_wide_role)
+        if context is not None:
+            role_data += ':{context}'.format(context=context)
+
+        payload = generate_unversioned_payload(self.user)
+        payload.update({
+            'roles': [role_data]
+        })
+        jwt_token = generate_jwt_token(payload)
+
+        self.client.cookies[jwt_cookie_name()] = jwt_token
 
 
 class BasketCreationMixin(UserMixin, JwtMixin):
@@ -124,6 +169,7 @@ class BasketCreationMixin(UserMixin, JwtMixin):
             stockrecords__partner_sku=self.FREE_SKU,
             stockrecords__price_excl_tax=Decimal('0.00'),
         )
+        self.set_jwt_cookie(SYSTEM_ENTERPRISE_OPERATOR_ROLE, ALL_ACCESS_CONTEXT)
 
     def create_basket(self, skus=None, checkout=None, payment_processor_name=None, auth=True, token=None):
         """Issue a POST request to the basket creation endpoint."""
@@ -193,7 +239,7 @@ class BasketCreationMixin(UserMixin, JwtMixin):
                 self.assertIsNone(response.data['payment_data'])
 
 
-class BusinessIntelligenceMixin(object):
+class BusinessIntelligenceMixin:
     """Provides assertions for test cases validating the emission of business intelligence events."""
 
     def assert_correct_event(
@@ -257,7 +303,7 @@ class BusinessIntelligenceMixin(object):
             self.fail()
 
 
-class SiteMixin(object):
+class SiteMixin:
     def setUp(self):
         super(SiteMixin, self).setUp()
 
@@ -268,11 +314,16 @@ class SiteMixin(object):
         Course.objects.all().delete()
         Partner.objects.all().delete()
         Site.objects.all().delete()
+        lms_url_root = "http://lms.testserver.fake"
         self.site_configuration = SiteConfigurationFactory(
+            lms_url_root=lms_url_root,
             from_email='from@example.com',
             oauth_settings={
-                'SOCIAL_AUTH_EDX_OIDC_KEY': 'key',
-                'SOCIAL_AUTH_EDX_OIDC_SECRET': 'secret'
+                'SOCIAL_AUTH_EDX_OAUTH2_KEY': 'key',
+                'SOCIAL_AUTH_EDX_OAUTH2_SECRET': 'secret',
+                'BACKEND_SERVICE_EDX_OAUTH2_KEY': 'key',
+                'BACKEND_SERVICE_EDX_OAUTH2_SECRET': 'secret',
+                'SOCIAL_AUTH_EDX_OAUTH2_LOGOUT_URL': lms_url_root + '/logout',
             },
             partner__name='edX',
             partner__short_code='edx',
@@ -289,6 +340,8 @@ class SiteMixin(object):
         self.request.session = None
         self.request.site = self.site
         set_thread_variable('request', self.request)
+        set_current_request(self.request)
+        self.addCleanup(set_current_request)
 
     def mock_access_token_response(self, status=200, **token_data):
         """ Mock the response from the OAuth provider's access token endpoint. """
@@ -310,18 +363,15 @@ class SiteMixin(object):
         return token
 
 
-class TestServerUrlMixin(object):
+class TestServerUrlMixin:
     def get_full_url(self, path, site=None):
         """ Returns a complete URL with the given path. """
         site = site or self.site
         return 'http://{domain}{path}'.format(domain=site.domain, path=path)
 
 
-class ApiMockMixin(object):
+class ApiMockMixin:
     """ Common Mocks for the API responses. """
-
-    def setUp(self):
-        super(ApiMockMixin, self).setUp()
 
     def mock_api_error(self, error, url):
         def callback(request, uri, headers):  # pylint: disable=unused-argument
@@ -330,11 +380,8 @@ class ApiMockMixin(object):
         httpretty.register_uri(httpretty.GET, url, body=callback, content_type=CONTENT_TYPE)
 
 
-class LmsApiMockMixin(object):
-    """ Mocks for the LMS API reponses. """
-
-    def setUp(self):
-        super(LmsApiMockMixin, self).setUp()
+class LmsApiMockMixin:
+    """ Mocks for the LMS API responses. """
 
     def mock_course_api_response(self, course=None):
         """ Helper function to register an API endpoint for the course information. """
@@ -387,7 +434,7 @@ class LmsApiMockMixin(object):
         httpretty.register_uri(httpretty.GET, url, body=json.dumps(eligibility_data), content_type=CONTENT_TYPE)
 
     def mock_verification_status_api(self, site, user, status=200, is_verified=True):
-        """ Mock verification API endpoint. Returns verfication status data. """
+        """ Mock verification API endpoint. Returns verification status data. """
         verification_data = {
             'status': 'approved',
             'expiration_datetime': (now() + datetime.timedelta(days=1)).isoformat(),
@@ -411,3 +458,17 @@ class LmsApiMockMixin(object):
             username=username
         )
         httpretty.register_uri(httpretty.POST, url, body=response, content_type=CONTENT_TYPE)
+
+
+class TestWaffleFlagMixin:
+    """ Updates or creates a waffle flag and activates to True. Turns on any waffle flag to all tests
+    without requiring the addition of the flag in individual methods/classes """
+    def setUp(self):
+        super(TestWaffleFlagMixin, self).setUp()
+        # Note: if you are adding a waffle flag and need to have unit tests
+        # run with the flag on, import and add the flag to the list below.
+        # Note 2: Flags should be temporary, pls link the ticket to remove
+        # the flag from this mixin with the PR that added the flag.
+        waffle_flags_list = []
+        for flag_name in waffle_flags_list:
+            Flag.objects.update_or_create(name=flag_name, defaults={'everyone': True})

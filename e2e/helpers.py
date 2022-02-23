@@ -1,3 +1,5 @@
+
+
 from e2e.config import (
     BASIC_AUTH_PASSWORD,
     BASIC_AUTH_USERNAME,
@@ -8,7 +10,7 @@ from e2e.config import (
 )
 
 
-class LmsHelpers(object):
+class LmsHelpers:
     @staticmethod
     def build_url(path):
         url = '{}/{}'.format(LMS_URL_ROOT, path.lstrip('/'))
@@ -41,7 +43,7 @@ class LmsHelpers(object):
         selenium.get(url)
 
 
-class EcommerceHelpers(object):
+class EcommerceHelpers:
     @staticmethod
     def build_url(path):
         return '{}/{}'.format(ECOMMERCE_URL_ROOT, path.lstrip('/'))

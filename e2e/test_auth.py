@@ -1,8 +1,11 @@
-import pytest
+
+
 from selenium.common.exceptions import NoSuchElementException
 
 from e2e.config import LMS_URL_ROOT, MARKETING_URL_ROOT
 from e2e.helpers import EcommerceHelpers, LmsHelpers
+
+import pytest  # isort:skip
 
 
 def test_login_and_logout(selenium):
@@ -10,7 +13,7 @@ def test_login_and_logout(selenium):
 
     LmsHelpers.login(selenium)
 
-    # Visit the Otto dashboard to trigger an OpenID Connect login
+    # Visit the Otto dashboard to trigger a login
     EcommerceHelpers.visit_dashboard(selenium)
 
     # Logging out of Otto should redirect the user to the LMS logout page, which redirects
@@ -24,7 +27,7 @@ def test_provider_logout(selenium):
 
     LmsHelpers.login(selenium)
 
-    # Visit the Otto dashboard to trigger an OpenID Connect login
+    # Visit the Otto dashboard to trigger a login
     EcommerceHelpers.visit_dashboard(selenium)
 
     LmsHelpers.logout(selenium)

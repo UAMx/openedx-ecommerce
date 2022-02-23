@@ -1,8 +1,10 @@
 import datetime
 import hashlib
 import logging
-from urlparse import urljoin, urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit
 
+import waffle
+from analytics import Client as SegmentClient
 from dateutil.parser import parse
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
@@ -12,18 +14,21 @@ from django.db import models
 from django.utils.functional import cached_property
 from django.utils.timezone import now
 from django.utils.translation import ugettext_lazy as _
+from edx_django_utils import monitoring as monitoring_utils
 from edx_django_utils.cache import TieredCache
+from edx_rbac.models import UserRole, UserRoleAssignment
 from edx_rest_api_client.client import EdxRestApiClient
 from jsonfield.fields import JSONField
-from requests.exceptions import ConnectionError, Timeout
+from requests.exceptions import ConnectionError as ReqConnectionError
+from requests.exceptions import Timeout
+from simple_history.models import HistoricalRecords
 from slumber.exceptions import HttpNotFoundError, SlumberBaseException
 
-from analytics import Client as SegmentClient
-from ecommerce.core.url_utils import get_lms_url
+from ecommerce.core.constants import ALL_ACCESS_CONTEXT, ALLOW_MISSING_LMS_USER_ID
+from ecommerce.core.exceptions import MissingLmsUserIdException
 from ecommerce.core.utils import log_message_and_raise_validation_error
 from ecommerce.extensions.payment.exceptions import ProcessorNotFoundError
 from ecommerce.extensions.payment.helpers import get_processor_class, get_processor_class_by_name
-from ecommerce.journals.constants import JOURNAL_DISCOVERY_API_PATH  # TODO: journals dependency
 
 log = logging.getLogger(__name__)
 
@@ -129,12 +134,12 @@ class SiteConfiguration(models.Model):
         default=False
     )
     sdn_api_url = models.CharField(
-        verbose_name=_('US Treasury SDN API URL'),
+        verbose_name=_('[Deprecated] US Treasury SDN API URL'),
         max_length=255,
         blank=True
     )
     sdn_api_key = models.CharField(
-        verbose_name=_('US Treasury SDN API key'),
+        verbose_name=_('[Deprecated] US Treasury SDN API key'),
         max_length=255,
         blank=True
     )
@@ -177,12 +182,6 @@ class SiteConfiguration(models.Model):
         null=False,
         blank=False,
     )
-    # TODO: journals dependency
-    journals_api_url = models.URLField(
-        verbose_name=_('Journals Service API URL'),
-        null=True,
-        blank=True
-    )
     enable_apple_pay = models.BooleanField(
         # Translators: Do not translate "Apple Pay"
         verbose_name=_('Enable Apple Pay'),
@@ -193,6 +192,24 @@ class SiteConfiguration(models.Model):
         help_text=_('Enable the application of program offers to remaining unenrolled or unverified courses'),
         blank=True,
         default=False
+    )
+    hubspot_secret_key = models.CharField(
+        verbose_name=_('Hubspot Portal Secret Key'),
+        help_text=_('Secret key for Hubspot portal authentication'),
+        max_length=255,
+        blank=True
+    )
+    enable_microfrontend_for_basket_page = models.BooleanField(
+        verbose_name=_('Enable Microfrontend for Basket Page'),
+        help_text=_('Use the microfrontend implementation of the basket page instead of the server-side template'),
+        blank=True,
+        default=False
+    )
+    payment_microfrontend_url = models.URLField(
+        verbose_name=_('Payment Microfrontend URL'),
+        help_text=_('URL for the Payment Microfrontend (used if Enable Microfrontend for Basket Page is set)'),
+        null=True,
+        blank=True
     )
 
     @property
@@ -225,7 +242,7 @@ class SiteConfiguration(models.Model):
                     self.site.id,
                     name
                 )
-                raise ValidationError(exc.message)
+                raise ValidationError(str(exc))
 
     def _clean_client_side_payment_processor(self):
         """
@@ -297,7 +314,7 @@ class SiteConfiguration(models.Model):
     def segment_client(self):
         return SegmentClient(self.segment_key, debug=settings.DEBUG, send=settings.SEND_SEGMENT_EVENTS)
 
-    def save(self, *args, **kwargs):
+    def save(self, *args, **kwargs):  # pylint: disable=arguments-differ
         # Clear Site cache upon SiteConfiguration changed
         Site.objects.clear_cache()
         super(SiteConfiguration, self).save(*args, **kwargs)
@@ -356,9 +373,20 @@ class SiteConfiguration(models.Model):
         return settings.ENTERPRISE_API_URL
 
     @property
+    def enterprise_catalog_api_url(self):
+        """ Returns the URL for the Enterprise Catalog service. """
+        return settings.ENTERPRISE_CATALOG_API_URL
+
+    @property
     def enterprise_grant_data_sharing_url(self):
         """ Returns the URL for the Enterprise data sharing permission view. """
         return self.build_enterprise_service_url('grant_data_sharing_permissions')
+
+    @property
+    def payment_domain_name(self):
+        if self.enable_microfrontend_for_basket_page:
+            return urlsplit(self.payment_microfrontend_url).netloc
+        return self.site.domain
 
     @property
     def access_token(self):
@@ -379,8 +407,8 @@ class SiteConfiguration(models.Model):
         url = '{root}/access_token'.format(root=self.oauth2_provider_url)
         access_token, expiration_datetime = EdxRestApiClient.get_oauth_access_token(
             url,
-            self.oauth_settings['SOCIAL_AUTH_EDX_OIDC_KEY'],  # pylint: disable=unsubscriptable-object
-            self.oauth_settings['SOCIAL_AUTH_EDX_OIDC_SECRET'],  # pylint: disable=unsubscriptable-object
+            self.oauth_settings['BACKEND_SERVICE_EDX_OAUTH2_KEY'],  # pylint: disable=unsubscriptable-object
+            self.oauth_settings['BACKEND_SERVICE_EDX_OAUTH2_SECRET'],  # pylint: disable=unsubscriptable-object
             token_type='jwt'
         )
 
@@ -398,26 +426,6 @@ class SiteConfiguration(models.Model):
         """
 
         return EdxRestApiClient(self.discovery_api_url, jwt=self.access_token)
-
-    # TODO: journals dependency
-    @cached_property
-    def journal_discovery_api_client(self):
-        """
-        Returns an Journal API client to access the Discovery service.
-
-        Returns:
-            EdxRestApiClient: The client to access the Journal API in the Discovery service.
-        """
-        split_url = urlsplit(self.discovery_api_url)
-        journal_discovery_url = urlunsplit([
-            split_url.scheme,
-            split_url.netloc,
-            JOURNAL_DISCOVERY_API_PATH,
-            split_url.query,
-            split_url.fragment
-        ])
-
-        return EdxRestApiClient(journal_discovery_url, jwt=self.access_token)
 
     @cached_property
     def embargo_api_client(self):
@@ -437,6 +445,20 @@ class SiteConfiguration(models.Model):
 
         """
         return EdxRestApiClient(self.enterprise_api_url, jwt=self.access_token)
+
+    @cached_property
+    def enterprise_catalog_api_client(self):
+        """
+        Returns a REST API client for the provided enterprise catalog service
+
+        Example:
+            site.siteconfiguration.enterprise_catalog_api_client.enterprise-catalog.get()
+
+        Returns:
+            EdxRestApiClient: The client to access the Enterprise Catalog service.
+
+        """
+        return EdxRestApiClient(self.enterprise_catalog_api_url, jwt=self.access_token)
 
     @cached_property
     def consent_api_client(self):
@@ -470,22 +492,137 @@ class SiteConfiguration(models.Model):
 
 
 class User(AbstractUser):
-    """Custom user model for use with OIDC."""
+    """
+    Custom user model for use with python-social-auth via edx-auth-backends.
+    """
 
+    # This preserves the 30 character limit on last_name, avoiding a large migration
+    # on the ecommerce_user table that would otherwise have come with Django 2.
+    # See https://docs.djangoproject.com/en/3.0/releases/2.0/#abstractuser-last-name-max-length-increased-to-150
+    last_name = models.CharField(_('last name'), max_length=30, blank=True)
     full_name = models.CharField(_('Full Name'), max_length=255, blank=True, null=True)
+    tracking_context = JSONField(blank=True, null=True)
+    email = models.EmailField(max_length=254, verbose_name='email address', blank=True, db_index=True)
+    lms_user_id = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text=_(u'LMS user id'),
+    )
+
+    class Meta:
+        get_latest_by = 'date_joined'
+        db_table = 'ecommerce_user'
 
     @property
     def access_token(self):
+        """
+        Returns the access token from the extra data in the user's social auth.
+
+        Note that a single user_id can be associated with multiple provider/uid combinations. For example:
+            provider    uid             user_id
+            edx-oidc    person          123
+            edx-oauth2  person          123
+            edx-oauth2  person@edx.org  123
+        """
         try:
-            return self.social_auth.first().extra_data[u'access_token']  # pylint: disable=no-member
+            return self.social_auth.order_by('-id').first().extra_data[u'access_token']  # pylint: disable=no-member
         except Exception:  # pylint: disable=broad-except
             return None
 
-    tracking_context = JSONField(blank=True, null=True)
+    def lms_user_id_with_metric(self, usage=None, allow_missing=False):
+        """
+        Returns the LMS user_id, or None if not found. Also sets a metric with the result.
 
-    class Meta(object):
-        get_latest_by = 'date_joined'
-        db_table = 'ecommerce_user'
+        Arguments:
+            usage (string): Optional. A description of how the returned id will be used. This will be included in log
+                messages if the LMS user id cannot be found.
+            allow_missing (boolean): True if the LMS user id is allowed to be missing. This affects the log messages
+                and custom metrics. Defaults to False.
+
+        Side effect:
+            Writes custom metric.
+        """
+        # Read the lms_user_id from the ecommerce_user.
+        lms_user_id = self.lms_user_id
+        if lms_user_id:
+            monitoring_utils.set_custom_metric('ecommerce_found_lms_user_id', lms_user_id)
+            return lms_user_id
+
+        # Could not find the lms_user_id
+        if allow_missing:
+            monitoring_utils.set_custom_metric('ecommerce_missing_lms_user_id_allowed', self.id)
+            log.info(u'Could not find lms_user_id with metric for user %s for %s. Missing lms_user_id is allowed.',
+                     self.id, usage, exc_info=True)
+        else:
+            monitoring_utils.set_custom_metric('ecommerce_missing_lms_user_id', self.id)
+            log.warning(u'Could not find lms_user_id with metric for user %s for %s.', self.id, usage, exc_info=True)
+
+        return None
+
+    def add_lms_user_id(self, missing_metric_key, called_from, allow_missing=False):
+        """
+        If this user does not already have an LMS user id, look for the id in social auth. If the id can be found,
+        add it to the user and save the user.
+
+        The LMS user_id may already be present for the user. It may have been added from the jwt (see the
+        EDX_DRF_EXTENSIONS.JWT_PAYLOAD_USER_ATTRIBUTE_MAPPING settings) or by a previous call to this method.
+
+        Arguments:
+            missing_metric_key (String): Key name for metric that will be created if the LMS user id cannot be found.
+            called_from (String): Descriptive string describing the caller. This will be included in log messages.
+            allow_missing (boolean): True if the LMS user id is allowed to be missing. This affects the log messages,
+            custom metrics, and (in combination with the allow_missing_lms_user_id switch), whether an
+            MissingLmsUserIdException is raised. Defaults to False.
+
+        Side effect:
+            If the LMS id cannot be found, writes custom metrics.
+        """
+        if not self.lms_user_id:
+            # Check for the LMS user id in social auth
+            lms_user_id_social_auth, social_auth_id = self._get_lms_user_id_from_social_auth()
+            if lms_user_id_social_auth:
+                self.lms_user_id = lms_user_id_social_auth
+                self.save()
+                log.info(u'Saving lms_user_id from social auth with id %s for user %s. Called from %s', social_auth_id,
+                         self.id, called_from)
+            else:
+                # Could not find the LMS user id
+                if allow_missing or waffle.switch_is_active(ALLOW_MISSING_LMS_USER_ID):
+                    monitoring_utils.set_custom_metric('ecommerce_missing_lms_user_id_allowed', self.id)
+                    monitoring_utils.set_custom_metric(missing_metric_key + '_allowed', self.id)
+
+                    error_msg = (u'Could not find lms_user_id for user {user_id}. Missing lms_user_id is allowed. '
+                                 u'Called from {called_from}'.format(user_id=self.id, called_from=called_from))
+                    log.info(error_msg, exc_info=True)
+                else:
+                    monitoring_utils.set_custom_metric('ecommerce_missing_lms_user_id', self.id)
+                    monitoring_utils.set_custom_metric(missing_metric_key, self.id)
+
+                    error_msg = u'Could not find lms_user_id for user {user_id}. Called from {called_from}'.format(
+                        user_id=self.id, called_from=called_from)
+                    log.error(error_msg, exc_info=True)
+
+                    raise MissingLmsUserIdException(error_msg)
+
+    def _get_lms_user_id_from_social_auth(self):
+        """
+        Find the LMS user_id passed through social auth. Because a single user_id can be associated with multiple
+        provider/uid combinations, start by checking the most recently saved social auth entry.
+
+        Returns:
+            (lms_user_id, social_auth_id): a tuple containing the LMS user id and the id of the social auth entry
+                where the LMS user id was found. Returns None, None if the LMS user id was not found.
+        """
+        try:
+            auth_entries = self.social_auth.order_by('-id')
+            if auth_entries:
+                for auth_entry in auth_entries:
+                    lms_user_id_social_auth = auth_entry.extra_data.get(u'user_id')
+                    if lms_user_id_social_auth:
+                        return lms_user_id_social_auth, auth_entry.id
+        except Exception:  # pylint: disable=broad-except
+            log.warning(u'Exception retrieving lms_user_id from social_auth for user %s.', self.id, exc_info=True)
+        return None, None
 
     def get_full_name(self):
         return self.full_name or super(User, self).get_full_name()
@@ -511,14 +648,14 @@ class User(AbstractUser):
             )
             response = api.accounts(self.username).get()
             return response
-        except (ConnectionError, SlumberBaseException, Timeout):
+        except (ReqConnectionError, SlumberBaseException, Timeout):
             log.exception(
                 'Failed to retrieve account details for [%s]',
                 self.username
             )
             raise
 
-    def is_eligible_for_credit(self, course_key):
+    def is_eligible_for_credit(self, course_key, site_configuration):
         """
         Check if a user is eligible for a credit course.
         Calls the LMS eligibility API endpoint and sends the username and course key
@@ -539,12 +676,9 @@ class User(AbstractUser):
             'course_key': course_key
         }
         try:
-            api = EdxRestApiClient(
-                get_lms_url('api/credit/v1/'),
-                oauth_access_token=self.access_token
-            )
+            api = site_configuration.credit_api_client
             response = api.eligibility().get(**query_strings)
-        except (ConnectionError, SlumberBaseException, Timeout):  # pragma: no cover
+        except (ReqConnectionError, SlumberBaseException, Timeout):  # pragma: no cover
             log.exception(
                 'Failed to retrieve eligibility details for [%s] in course [%s]',
                 self.username,
@@ -567,15 +701,12 @@ class User(AbstractUser):
         """
         try:
             cache_key = 'verification_status_{username}'.format(username=self.username)
-            cache_key = hashlib.md5(cache_key).hexdigest()
+            cache_key = hashlib.md5(cache_key.encode('utf-8')).hexdigest()
             verification_cached_response = TieredCache.get_cached_response(cache_key)
             if verification_cached_response.is_found:
                 return verification_cached_response.value
 
-            api = EdxRestApiClient(
-                site.siteconfiguration.build_lms_url('api/user/v1/'),
-                oauth_access_token=self.access_token
-            )
+            api = site.siteconfiguration.user_api_client
             response = api.accounts(self.username).verification_status().get()
 
             verification = response.get('is_verified', False)
@@ -586,7 +717,7 @@ class User(AbstractUser):
         except HttpNotFoundError:
             log.debug('No verification data found for [%s]', self.username)
             return False
-        except (ConnectionError, SlumberBaseException, Timeout):
+        except (ReqConnectionError, SlumberBaseException, Timeout):
             msg = 'Failed to retrieve verification status details for [{username}]'.format(username=self.username)
             log.warning(msg)
             return False
@@ -613,7 +744,7 @@ class User(AbstractUser):
 
 
 class Client(User):
-    pass
+    """ Client Model. """
 
 
 class BusinessClient(models.Model):
@@ -627,12 +758,68 @@ class BusinessClient(models.Model):
         blank=True,
     )
 
+    history = HistoricalRecords()
+
     def __str__(self):
         return self.name
 
-    def save(self, *args, **kwargs):
+    def save(self, *args, **kwargs):  # pylint: disable=arguments-differ
         if not self.name:
             log_message_and_raise_validation_error(
                 'Failed to create BusinessClient. BusinessClient name may not be empty.'
             )
         super(BusinessClient, self).save(*args, **kwargs)
+
+
+class EcommerceFeatureRole(UserRole):
+    """
+    User role definitions specific to Ecommerce.
+     .. no_pii:
+    """
+
+    def __str__(self):
+        """
+        Return human-readable string representation.
+        """
+        return "<EcommerceFeatureRole {role}>".format(role=self.name)
+
+    def __repr__(self):
+        """
+        Return uniquely identifying string representation.
+        """
+        return self.__str__()
+
+
+class EcommerceFeatureRoleAssignment(UserRoleAssignment):
+    """
+    Model to map users to a EcommerceFeatureRole.
+     .. no_pii:
+    """
+
+    role_class = EcommerceFeatureRole
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, db_index=True, on_delete=models.CASCADE)
+    enterprise_id = models.UUIDField(blank=True, null=True, verbose_name='Enterprise Customer UUID')
+
+    def get_context(self):
+        """
+        Return the enterprise customer id or `*` if the user has access to all resources.
+        """
+        enterprise_id = ALL_ACCESS_CONTEXT
+        if self.enterprise_id:
+            enterprise_id = str(self.enterprise_id)
+        return enterprise_id
+
+    def __str__(self):
+        """
+        Return human-readable string representation.
+        """
+        return "<EcommerceFeatureRoleAssignment for User {user} assigned to role {role}>".format(
+            user=self.user.id,
+            role=self.role.name
+        )
+
+    def __repr__(self):
+        """
+        Return uniquely identifying string representation.
+        """
+        return self.__str__()

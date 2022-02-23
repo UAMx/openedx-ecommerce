@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
+
 
 from django.db import migrations, models
 
@@ -14,6 +14,7 @@ def create_credit_hours_attribute(apps, schema_editor):
 
     # Create our Product Attributes
     ProductAttribute = apps.get_model('catalogue', 'ProductAttribute')
+    ProductAttribute.skip_history_when_saving = True
     ProductAttribute.objects.create(
         product_class=seat,
         name='credit_hours',
@@ -28,6 +29,7 @@ def delete_credit_hours_attribute(apps, schema_editor):
 
     # Delete our Product Attributes
     ProductAttribute = apps.get_model('catalogue', 'ProductAttribute')
+    ProductAttribute.skip_history_when_saving = True
     ProductAttribute.objects.filter(code='credit_hours').delete()
 
 

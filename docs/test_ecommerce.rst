@@ -68,6 +68,16 @@ When you create E-Commerce tests, use the ``TestCase`` class in
 ``Partner`` objects configured. This will help you test any code that relies on
 these models, which are used for multi-tenancy.
 
+* To run a test really fast, use pytest.
+
+  .. code-block:: bash
+
+      $ pytest path/to/file.py::TestSuiteClass::test_name
+
+  * Note: You must update requirements and migrations before running with pytest.
+
+  * Some tests involving the database may be flaky.  If this doesn't work, use the ``manage.py`` method below.
+
 * To run all Python unit tests and quality checks, run the following command.
 
   .. code-block:: bash
@@ -81,25 +91,13 @@ these models, which are used for multi-tenancy.
 
       $ make fast_validate_python
 
-* To run the Python unit tests in a specific file, such as
+* To run the Python unit tests in a specific file and a specific test, such as
   ``ecommerce/courses/tests/test_utils.py``, run the following command and
   substitute the desired file path.
 
   .. code-block:: bash
 
-      $ DISABLE_ACCEPTANCE_TESTS=True ./manage.py test
-      ecommerce.courses.tests.test_utils --settings=ecommerce.settings.test
-      --with-ignore-docstrings --logging-level=DEBUG
-
-  Setting the DISABLE_MIGRATIONS variable significantly decreases the time
-  needed to run tests by creating the test database directly from Django model
-  definitions as opposed to applying the defined migrations.
-
-  .. code-block:: bash
-
-      $ DISABLE_MIGRATIONS=1 DISABLE_ACCEPTANCE_TESTS=True ./manage.py test
-      ecommerce.courses.tests.test_utils --settings=ecommerce.settings.test
-      --with-ignore-docstrings --logging-level=DEBUG
+      $ pytest ecommerce/courses/tests/test_utils.py::UtilsTests::test_get_course_info_from_catalog_cached
 
 To debug when running tests using ``manage.py``, you may need to use the
 following instead of ``pdb`` directly, or nosetests may hang while creating
@@ -107,12 +105,7 @@ the database::
 
     import nose.tools as nosepdb; nosepdb.set_trace()
 
-* To run tests without creating a database (i.e. really fast), use pytest.
-  If a test has a database dependency, the test will not pass.
 
-  .. code-block:: bash
-
-      $ pytest path_to_test
 
 JavaScript Unit Tests
 **********************
@@ -156,9 +149,8 @@ To configure the LMS, follow these steps.
       "ECOMMERCE_PUBLIC_URL_ROOT": "http://localhost:8002/"
       "JWT_ISSUER": "http://127.0.0.1:8000/oauth2" // Must match the E-Commerce JWT_ISSUER setting
       "OAUTH_ENFORCE_SECURE": false
-      "OAUTH_OIDC_ISSUER": "http://127.0.0.1:8000/oauth2"
 
-#. Verify that the following settings in ``lms.auth.json`` are correct.
+#. Verify that the following settings in ``lms.yml`` are correct.
 
    .. code-block:: bash
 
@@ -183,16 +175,17 @@ To configure the LMS, follow these steps.
 #. In the Django administration panel, verify that an OAuth2 client with the
    following attributes exists. If one does not already exist, :ref:`create a
    new one <Create Register Client>`. The client ID and secret must match the
-   values of the E-Commerce ``SOCIAL_AUTH_EDX_OIDC_KEY`` and
-   ``SOCIAL_AUTH_EDX_OIDC_SECRET`` settings, respectively.
+   values of the E-Commerce ``SOCIAL_AUTH_EDX_OAUTH2_KEY`` and
+   ``SOCIAL_AUTH_EDX_OAUTH2_SECRET`` settings, respectively.
 
    .. code-block:: bash
 
       URL:  http://localhost:8002/
-      Redirect URI: http://localhost:8002/complete/edx-oidc/
-      Client ID: 'replace-me'
-      Client Secret: 'replace-me'
-      Client Type: Confidential
+      Redirect uris: http://localhost:8002/complete/edx-oauth2/
+      Client id: 'replace-me'
+      Client secret: 'replace-me'
+      Client type: Confidentials
+      Authorization grant type: Authorization code
 
 #. In the Django administration panel, verify that the OAuth2 client referred
    to above is designated as a trusted client. If this isn't already the case,
@@ -279,7 +272,7 @@ settings by using environment variables.
 Run Acceptance Tests
 ********************
 
-Run all acceptance tests by executing ``make accept``. To run a specific test,
+Run all acceptance tests by executing ``make e2e``. To run a specific test,
 execute the following command.
 
 .. code-block:: bash
@@ -294,13 +287,13 @@ your own values.
 
 .. code-block:: bash
 
-    $ ECOMMERCE_URL_ROOT="http://localhost:8002" LMS_URL_ROOT="http://127.0.0.1:8000" LMS_USERNAME="<username>" LMS_EMAIL="<email address>" LMS_PASSWORD="<password>" ACCESS_TOKEN="<access token>" LMS_HTTPS="False" LMS_AUTO_AUTH="True" PAYPAL_EMAIL="<email address>" PAYPAL_PASSWORD="<password>" ENABLE_CYBERSOURCE_TESTS="False" VERIFIED_COURSE_ID="<course ID>" make accept
+    $ ECOMMERCE_URL_ROOT="http://localhost:8002" LMS_URL_ROOT="http://127.0.0.1:8000" LMS_USERNAME="<username>" LMS_EMAIL="<email address>" LMS_PASSWORD="<password>" ACCESS_TOKEN="<access token>" LMS_HTTPS="False" LMS_AUTO_AUTH="True" PAYPAL_EMAIL="<email address>" PAYPAL_PASSWORD="<password>" ENABLE_CYBERSOURCE_TESTS="False" VERIFIED_COURSE_ID="<course ID>" make e2e
 
 When you run the acceptance tests against a production-like staging
 environment, you might run the following command.
 
 .. code-block:: bash
 
-    $ ECOMMERCE_URL_ROOT="https://ecommerce.stage.edx.org" LMS_URL_ROOT="https://courses.stage.edx.org" LMS_USERNAME="<username>" LMS_EMAIL="<email address>" LMS_PASSWORD="<password>" ACCESS_TOKEN="<access token>" LMS_HTTPS="True" LMS_AUTO_AUTH="False" PAYPAL_EMAIL="<email address>" PAYPAL_PASSWORD="<password>" BASIC_AUTH_USERNAME="<username>" BASIC_AUTH_PASSWORD="<password>" HONOR_COURSE_ID="<course ID>" VERIFIED_COURSE_ID="<course ID>" make accept
+    $ ECOMMERCE_URL_ROOT="https://ecommerce.stage.edx.org" LMS_URL_ROOT="https://courses.stage.edx.org" LMS_USERNAME="<username>" LMS_EMAIL="<email address>" LMS_PASSWORD="<password>" ACCESS_TOKEN="<access token>" LMS_HTTPS="True" LMS_AUTO_AUTH="False" PAYPAL_EMAIL="<email address>" PAYPAL_PASSWORD="<password>" BASIC_AUTH_USERNAME="<username>" BASIC_AUTH_PASSWORD="<password>" HONOR_COURSE_ID="<course ID>" VERIFIED_COURSE_ID="<course ID>" make e2e
 
 .. include:: links/links.rst

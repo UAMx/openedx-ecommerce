@@ -1,3 +1,5 @@
+
+
 from django.test import RequestFactory
 from django.urls import reverse
 from oscar.core.loading import get_class, get_model
@@ -14,6 +16,7 @@ Selector = get_class('partner.strategy', 'Selector')
 
 
 class OrderDetailViewTestMixin(ThrottlingMixin):
+    @property
     def url(self):
         raise NotImplementedError
 
@@ -46,7 +49,7 @@ class OrderDetailViewTestMixin(ThrottlingMixin):
         self.assertEqual(response.status_code, 404)
 
 
-class ProductSerializerMixin(object):
+class ProductSerializerMixin:
     def serialize_product(self, product):
         """ Serializes a Product to a Python dict. """
         attribute_values = [
@@ -60,7 +63,7 @@ class ProductSerializerMixin(object):
             'id': product.id,
             'url': self.get_full_url(reverse('api:v2:product-detail', kwargs={'pk': product.id})),
             'structure': product.structure,
-            'product_class': unicode(product.get_product_class()),
+            'product_class': str(product.get_product_class()),
             'title': product.title,
             'expires': product.expires.strftime(ISO_8601_FORMAT) if product.expires else None,
             'attribute_values': attribute_values,
@@ -83,5 +86,5 @@ class ProductSerializerMixin(object):
             'product': stockrecord.product.id,
             'partner_sku': stockrecord.partner_sku,
             'price_currency': stockrecord.price_currency,
-            'price_excl_tax': unicode(stockrecord.price_excl_tax),
+            'price_excl_tax': str(stockrecord.price_excl_tax),
         }

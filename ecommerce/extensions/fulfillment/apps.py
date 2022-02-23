@@ -1,3 +1,5 @@
+
+
 from django.apps import AppConfig
 
 
@@ -6,7 +8,7 @@ class FulfillmentAppConfig(AppConfig):
     verbose_name = 'Fulfillment'
 
     def ready(self):
-        super(FulfillmentAppConfig, self).ready()
+        super().ready()
 
         # noinspection PyUnresolvedReferences
-        import ecommerce.extensions.fulfillment.signals  # pylint: disable=unused-variable
+        import ecommerce.extensions.fulfillment.signals  # pylint: disable=unused-import, import-outside-toplevel

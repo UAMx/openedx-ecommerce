@@ -5,7 +5,6 @@ overridden to use our custom fulfillment API.  Orders will either be fulfilled, 
 errors explaining why fulfillment may fail.
 
 """
-
 from oscar.apps.order import exceptions, processing
 
 from ecommerce.extensions.fulfillment import api as fulfillment_api

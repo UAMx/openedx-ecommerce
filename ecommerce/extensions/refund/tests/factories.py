@@ -1,13 +1,14 @@
+
+
 from decimal import Decimal
 
 import factory
 from django.conf import settings
 from oscar.core.loading import get_model
-from oscar.test.factories import UserFactory
 
 from ecommerce.extensions.refund.status import REFUND, REFUND_LINE
 from ecommerce.extensions.test.factories import create_order
-from ecommerce.tests.factories import SiteConfigurationFactory
+from ecommerce.tests.factories import SiteConfigurationFactory, UserFactory
 
 Category = get_model("catalogue", "Category")
 Partner = get_model('partner', 'Partner')
@@ -37,7 +38,7 @@ class RefundFactory(factory.DjangoModelFactory):
         self.total_credit_excl_tax = sum([line.line_credit_excl_tax for line in self.lines.all()])
         self.save()
 
-    class Meta(object):
+    class Meta:
         model = get_model('refund', 'Refund')
 
 
@@ -51,5 +52,5 @@ class RefundLineFactory(factory.DjangoModelFactory):
         order = create_order()
         return order.lines.first()
 
-    class Meta(object):
+    class Meta:
         model = get_model('refund', 'RefundLine')

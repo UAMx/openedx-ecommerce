@@ -1,8 +1,11 @@
 """ Checkout related views. """
-from __future__ import unicode_literals
 
+
+import logging
 from decimal import Decimal
 
+from django.conf import settings
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.http import Http404
 from django.shortcuts import get_object_or_404
@@ -11,6 +14,9 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import RedirectView, TemplateView
 from oscar.apps.checkout.views import *  # pylint: disable=wildcard-import, unused-wildcard-import
 from oscar.core.loading import get_class, get_model
+from requests.exceptions import ConnectionError as ReqConnectionError
+from requests.exceptions import Timeout
+from slumber.exceptions import SlumberHttpBaseException
 
 from ecommerce.core.url_utils import (
     get_lms_courseware_url,
@@ -18,34 +24,17 @@ from ecommerce.core.url_utils import (
     get_lms_explore_courses_url,
     get_lms_program_dashboard_url
 )
+from ecommerce.enterprise.api import fetch_enterprise_learner_data
 from ecommerce.enterprise.utils import has_enterprise_offer
 from ecommerce.extensions.checkout.exceptions import BasketNotFreeError
 from ecommerce.extensions.checkout.mixins import EdxOrderPlacementMixin
 from ecommerce.extensions.checkout.utils import get_receipt_page_url
+from ecommerce.extensions.payment.utils import get_program_uuid
 
 Applicator = get_class('offer.applicator', 'Applicator')
 Basket = get_model('basket', 'Basket')
-BasketAttribute = get_model('basket', 'BasketAttribute')
-BasketAttributeType = get_model('basket', 'BasketAttributeType')
 Order = get_model('order', 'Order')
-
-
-def get_program_uuid(order):
-    """
-    Return the program UUID associated with the given order, if one exists.
-
-    Arguments:
-        order (Order): The order object.
-
-    Returns:
-        string: The program UUID if the order is associated with a bundled purchase, otherwise None.
-    """
-    bundle_attributes = BasketAttribute.objects.filter(
-        basket=order.basket,
-        attribute_type=BasketAttributeType.objects.get(name='bundle_identifier')
-    )
-    bundle_attribute = bundle_attributes.first()
-    return bundle_attribute.value_text if bundle_attribute else None
+log = logging.getLogger(__name__)
 
 
 class FreeCheckoutView(EdxOrderPlacementMixin, RedirectView):
@@ -59,7 +48,7 @@ class FreeCheckoutView(EdxOrderPlacementMixin, RedirectView):
     permanent = False
 
     @method_decorator(login_required)
-    def dispatch(self, *args, **kwargs):
+    def dispatch(self, *args, **kwargs):  # pylint: disable=arguments-differ
         return super(FreeCheckoutView, self).dispatch(*args, **kwargs)
 
     def get_redirect_url(self, *args, **kwargs):
@@ -92,7 +81,8 @@ class FreeCheckoutView(EdxOrderPlacementMixin, RedirectView):
             else:
                 receipt_path = get_receipt_page_url(
                     order_number=order.number,
-                    site_configuration=order.site.siteconfiguration
+                    site_configuration=order.site.siteconfiguration,
+                    disable_back_button=True,
                 )
                 url = site.siteconfiguration.build_lms_url(receipt_path)
         else:
@@ -108,10 +98,10 @@ class CancelCheckoutView(TemplateView):
     payment processor page.
     """
 
-    template_name = 'checkout/cancel_checkout.html'
+    template_name = 'oscar/checkout/cancel_checkout.html'
 
     @method_decorator(csrf_exempt)
-    def dispatch(self, *args, **kwargs):
+    def dispatch(self, *args, **kwargs):  # pylint: disable=arguments-differ
         """
         Request needs to be csrf_exempt to handle POST back from external payment processor.
         """
@@ -135,10 +125,10 @@ class CancelCheckoutView(TemplateView):
 class CheckoutErrorView(TemplateView):
     """ Displays an error page when checkout does not complete successfully. """
 
-    template_name = 'checkout/error.html'
+    template_name = 'oscar/checkout/error.html'
 
     @method_decorator(csrf_exempt)
-    def dispatch(self, *args, **kwargs):
+    def dispatch(self, *args, **kwargs):  # pylint: disable=arguments-differ
         """
         Request needs to be csrf_exempt to handle POST back from external payment processor.
         """
@@ -165,21 +155,25 @@ class ReceiptResponseView(ThankYouView):
 
     @method_decorator(csrf_exempt)
     @method_decorator(login_required)
-    def dispatch(self, *args, **kwargs):
+    def dispatch(self, *args, **kwargs):  # pylint: disable=arguments-differ
         """ Customers should only be able to view their receipts when logged in. """
         return super(ReceiptResponseView, self).dispatch(*args, **kwargs)
 
     def get(self, request, *args, **kwargs):
         try:
-            return super(ReceiptResponseView, self).get(request, *args, **kwargs)
+            response = super(ReceiptResponseView, self).get(request, *args, **kwargs)
         except Http404:
             self.template_name = 'edx/checkout/receipt_not_found.html'
             context = {
                 'order_history_url': request.site.siteconfiguration.build_lms_url('account/settings'),
             }
             return self.render_to_response(context=context, status=404)
+        learner_portal_url = self.add_message_if_enterprise_user(request)
+        if learner_portal_url:
+            response.context_data['order_dashboard_url'] = learner_portal_url
+        return response
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs):  # pylint: disable=arguments-differ
         context = super(ReceiptResponseView, self).get_context_data(**kwargs)
         order = context[self.context_object_name]
         has_enrollment_code_product = False
@@ -197,7 +191,8 @@ class ReceiptResponseView(ThankYouView):
         context.update(self.get_show_verification_banner_context(context))
         context.update({
             'explore_courses_url': get_lms_explore_courses_url(),
-            'has_enrollment_code_product': has_enrollment_code_product
+            'has_enrollment_code_product': has_enrollment_code_product,
+            'disable_back_button': self.request.GET.get('disable_back_button', 0),
         })
         return context
 
@@ -268,3 +263,38 @@ class ReceiptResponseView(ThankYouView):
             'show_verification_banner': verification_url and not user_verified
         })
         return context
+
+    def add_message_if_enterprise_user(self, request):
+        try:
+            # If enterprise feature is enabled return all the enterprise_customer associated with user.
+            learner_data = fetch_enterprise_learner_data(request.site, request.user)
+        except (ReqConnectionError, KeyError, SlumberHttpBaseException, Timeout) as exc:
+            log.info('[enterprise learner message] Exception while retrieving enterprise learner data for '
+                     'User: %s, Exception: %s', request.user, exc)
+            return None
+
+        try:
+            enterprise_customer = learner_data['results'][0]['enterprise_customer']
+        except (IndexError, KeyError):
+            # If enterprise feature is enabled and user is not associated to any enterprise
+            return None
+
+        enable_learner_portal = enterprise_customer.get('enable_learner_portal')
+        enterprise_learner_portal_slug = enterprise_customer.get('slug')
+        if enable_learner_portal and enterprise_learner_portal_slug:
+            learner_portal_url = '{scheme}://{hostname}/{slug}'.format(
+                scheme=request.scheme,
+                hostname=settings.ENTERPRISE_LEARNER_PORTAL_HOSTNAME,
+                slug=enterprise_learner_portal_slug,
+            )
+            message = (
+                'Your company, {enterprise_customer_name}, has a dedicated page where '
+                'you can see all of your sponsored courses. '
+                'Go to <a href="{url}">your learner portal</a>.'
+            ).format(
+                enterprise_customer_name=enterprise_customer['name'],
+                url=learner_portal_url
+            )
+            messages.add_message(request, messages.INFO, message, extra_tags='safe')
+            return learner_portal_url
+        return None

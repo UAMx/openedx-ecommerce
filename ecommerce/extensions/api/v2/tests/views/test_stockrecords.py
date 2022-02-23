@@ -1,3 +1,5 @@
+
+
 import json
 
 from django.contrib.auth.models import Permission
@@ -41,7 +43,7 @@ class StockRecordViewSetTests(ProductSerializerMixin, DiscoveryTestMixin, Thrott
         results = [self.serialize_stockrecord(stockrecord) for stockrecord in
                    self.product.stockrecords.all().order_by('id')]
         expected = {'count': 2, 'next': None, 'previous': None, 'results': results}
-        self.assertDictEqual(json.loads(response.content), expected)
+        self.assertDictEqual(response.json(), expected)
 
     def test_list_with_no_stockrecords(self):
         """ Verify the endpoint returns an empty list. """
@@ -49,7 +51,7 @@ class StockRecordViewSetTests(ProductSerializerMixin, DiscoveryTestMixin, Thrott
         response = self.client.get(self.list_path)
         self.assertEqual(response.status_code, 200)
         expected = {'count': 0, 'next': None, 'previous': None, 'results': []}
-        self.assertDictEqual(json.loads(response.content), expected)
+        self.assertDictEqual(response.json(), expected)
 
     def test_retrieve_with_invalid_id(self):
         """ Verify endpoint returns 404 if no stockrecord is available. """
@@ -62,7 +64,14 @@ class StockRecordViewSetTests(ProductSerializerMixin, DiscoveryTestMixin, Thrott
         path = reverse(self.detail_path, kwargs={'pk': self.stockrecord.id})
         response = self.client.get(path)
         self.assertEqual(response.status_code, 200)
-        self.assertDictEqual(json.loads(response.content), self.serialize_stockrecord(self.stockrecord))
+        self.assertDictEqual(response.json(), self.serialize_stockrecord(self.stockrecord))
+
+    def test_retrieve_by_sku(self):
+        """ Verify a single stockrecord is returned by giving a sku. """
+        path = reverse(self.detail_path, kwargs={'pk': self.stockrecord.partner_sku})
+        response = self.client.get(path)
+        self.assertEqual(response.status_code, 200)
+        self.assertDictEqual(response.json(), self.serialize_stockrecord(self.stockrecord))
 
     def test_update(self):
         """ Verify update endpoint allows to update 'price_currency' and 'price_excl_tax'. """
@@ -77,7 +86,7 @@ class StockRecordViewSetTests(ProductSerializerMixin, DiscoveryTestMixin, Thrott
         self.assertEqual(response.status_code, 200)
 
         stockrecord = StockRecord.objects.get(id=self.stockrecord.id)
-        self.assertEqual(unicode(stockrecord.price_excl_tax), data['price_excl_tax'])
+        self.assertEqual(str(stockrecord.price_excl_tax), data['price_excl_tax'])
         self.assertEqual(stockrecord.price_currency, data['price_currency'])
 
     def test_update_without_permission(self):
@@ -92,6 +101,17 @@ class StockRecordViewSetTests(ProductSerializerMixin, DiscoveryTestMixin, Thrott
         response = self.attempt_update(data)
         self.assertEqual(response.status_code, 403)
 
+    def test_update_as_staff(self):
+        """ Verify update endpoint allows updating with staff permission. """
+        self.user.is_staff = True
+        self.user.save()
+
+        data = {
+            "price_excl_tax": "500.00"
+        }
+        response = self.attempt_update(data)
+        self.assertEqual(response.status_code, 200)
+
     def test_allowed_fields_for_update(self):
         """ Verify the endpoint only allows the price_excl_tax and price_currency fields to be updated. """
         self.user.user_permissions.add(self.change_permission)
@@ -104,7 +124,7 @@ class StockRecordViewSetTests(ProductSerializerMixin, DiscoveryTestMixin, Thrott
         self.assertEqual(response.status_code, 400, response.content)
         stockrecord = StockRecord.objects.get(id=self.stockrecord.id)
         self.assertEqual(self.serialize_stockrecord(self.stockrecord), self.serialize_stockrecord(stockrecord))
-        self.assertDictEqual(json.loads(response.content), {
+        self.assertDictEqual(response.json(), {
             'message': 'Only the price_currency and price_excl_tax fields are allowed to be modified.'})
 
     def attempt_update(self, data):

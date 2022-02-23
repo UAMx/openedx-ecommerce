@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """Unit tests for the analytics app."""
+
+
 from django.apps import apps
 from django.test import override_settings
 from oscar.core.loading import get_model

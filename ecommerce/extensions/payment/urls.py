@@ -1,3 +1,5 @@
+
+
 from django.conf.urls import include, url
 
 from ecommerce.extensions.payment.views import PaymentFailedView, SDNFailure, cybersource, paypal, stripe, redsys
@@ -8,9 +10,11 @@ CYBERSOURCE_APPLE_PAY_URLS = [
 ]
 
 CYBERSOURCE_URLS = [
-    url(r'^apple-pay/', include(CYBERSOURCE_APPLE_PAY_URLS, namespace='apple_pay')),
+    url(r'^apple-pay/', include((CYBERSOURCE_APPLE_PAY_URLS, 'apple_pay'))),
     url(r'^redirect/$', cybersource.CybersourceInterstitialView.as_view(), name='redirect'),
     url(r'^submit/$', cybersource.CybersourceSubmitView.as_view(), name='submit'),
+    url(r'^api-submit/$', cybersource.CybersourceSubmitAPIView.as_view(), name='api_submit'),
+    url(r'^authorize/$', cybersource.CybersourceAuthorizeAPIView.as_view(), name='authorize'),
 ]
 
 PAYPAL_URLS = [
@@ -31,11 +35,11 @@ REDSYS_URLS = [
 ]
 
 urlpatterns = [
-    url(r'^cybersource/', include(CYBERSOURCE_URLS, namespace='cybersource')),
+    url(r'^cybersource/', include((CYBERSOURCE_URLS, 'cybersource'))),
     url(r'^error/$', PaymentFailedView.as_view(), name='payment_error'),
-    url(r'^paypal/', include(PAYPAL_URLS, namespace='paypal')),
-    url(r'^sdn/', include(SDN_URLS, namespace='sdn')),
-    url(r'^stripe/', include(STRIPE_URLS, namespace='stripe')),
-    url(r'^redsys/', include(REDSYS_URLS, namespace='redsys')),
+    url(r'^paypal/', include((PAYPAL_URLS, 'paypal'))),
+    url(r'^sdn/', include((SDN_URLS, 'sdn'))),
+    url(r'^stripe/', include((STRIPE_URLS, 'stripe'))),
+    url(r'^redsys/', include((REDSYS_URLS, 'redsys'))),
 ]
 

@@ -1,7 +1,7 @@
 """
 This command migrates the conditional offers for enterprise coupons to the enterprise conditional offer implementation.
 """
-from __future__ import unicode_literals
+
 
 import logging
 from time import sleep
@@ -12,6 +12,7 @@ from django.core.management import BaseCommand
 from ecommerce.enterprise.benefits import BENEFIT_MAP
 from ecommerce.enterprise.conditions import EnterpriseCustomerCondition
 from ecommerce.enterprise.utils import get_enterprise_customer
+from ecommerce.extensions.offer.models import OFFER_PRIORITY_VOUCHER
 from ecommerce.extensions.voucher.models import Voucher
 from ecommerce.programs.custom import class_path, get_model
 
@@ -105,9 +106,7 @@ class Command(BaseCommand):
             email_domains=offer.email_domains,
             site=offer.site,
             partner=offer.partner,
-            # For initial creation, we are setting the priority lower so that we don't want to use these
-            #  until we've done some other implementation work. We will update this to a higher value later.
-            priority=5,
+            priority=OFFER_PRIORITY_VOUCHER,
         )
 
         voucher.offers.add(new_offer)
@@ -127,7 +126,7 @@ class Command(BaseCommand):
 
         try:
             vouchers = self._get_voucher_batch(batch_offset, batch_offset + batch_limit)
-            while len(vouchers) > 0:
+            while vouchers:
                 for index, voucher in enumerate(vouchers):
                     logger.info('Processing Voucher with index %s and id %s', current_batch_index + index, voucher.id)
                     self._migrate_voucher(voucher)

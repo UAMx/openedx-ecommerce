@@ -1,4 +1,4 @@
-from __future__ import unicode_literals
+
 
 import json
 import logging
@@ -15,7 +15,7 @@ Product = get_model('catalogue', 'Product')
 StockRecord = get_model('partner', 'StockRecord')
 
 
-class LMSPublisher(object):
+class LMSPublisher:
     def get_seat_expiration(self, seat):
         if not seat.expires or 'professional' in getattr(seat.attr, 'certificate_type', ''):
             return None
@@ -82,7 +82,7 @@ class LMSPublisher(object):
                     'Failed to publish CreditCourse for [%s] to LMS. Status was [%d]. Body was [%s].',
                     course_id,
                     e.response.status_code,
-                    e.content
+                    e.content.decode('utf-8')
                 )
                 return error_message
             except:  # pylint: disable=bare-except
@@ -100,14 +100,15 @@ class LMSPublisher(object):
             commerce_api_client = site.siteconfiguration.commerce_api_client
             commerce_api_client.courses(course_id).put(data=data)
             logger.info('Successfully published commerce data for [%s].', course_id)
+            return None
         except SlumberHttpBaseException as e:  # pylint: disable=bare-except
             logger.exception(
                 'Failed to publish commerce data for [%s] to LMS. Status was [%d]. Body was [%s].',
                 course_id,
                 e.response.status_code,
-                e.content
+                e.content.decode('utf-8')
             )
-            return self._parse_error(e.content, error_message)
+            return self._parse_error(e.content.decode('utf-8'), error_message)
         except Exception:  # pylint: disable=broad-except
             logger.exception('Failed to publish commerce data for [%s] to LMS.', course_id)
             return error_message
@@ -129,10 +130,10 @@ class LMSPublisher(object):
         message = None
         try:
             data = json.loads(response)
-            if isinstance(data, basestring):
+            if isinstance(data, str):
                 message = data
-            elif isinstance(data, dict) and len(data) > 0:
-                message = data.values()[0]
+            elif isinstance(data, dict) and data:
+                message = list(data.values())[0]
             if isinstance(message, list):
                 message = message[0]
         except Exception:  # pylint: disable=broad-except
@@ -140,5 +141,5 @@ class LMSPublisher(object):
 
         if message:
             return ' '.join([default_error_message, message])
-        else:
-            return default_error_message
+
+        return default_error_message

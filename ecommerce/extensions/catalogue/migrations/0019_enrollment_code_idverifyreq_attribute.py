@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
+
 
 from django.db import migrations
 from oscar.core.loading import get_model
@@ -12,18 +12,21 @@ ProductClass = get_model("catalogue", "ProductClass")
 
 def create_idverifyreq_attribute(apps, schema_editor):
     """Create enrollment code 'id_verification_required' attribute."""
+    ProductAttribute.skip_history_when_saving = True
     enrollment_code_class = ProductClass.objects.get(name=ENROLLMENT_CODE_PRODUCT_CLASS_NAME)
-    ProductAttribute.objects.create(
+    pa = ProductAttribute(
         product_class=enrollment_code_class,
         name='id_verification_required',
         code='id_verification_required',
         type='boolean',
         required=False
     )
+    pa.save()
 
 
 def remove_idverifyreq_attribute(apps, schema_editor):
     """Remove enrollment code 'id_verification_required' attribute."""
+    ProductAttribute.skip_history_when_saving = True
     enrollment_code_class = ProductClass.objects.get(name=ENROLLMENT_CODE_PRODUCT_CLASS_NAME)
     ProductAttribute.objects.get(product_class=enrollment_code_class, name='id_verification_required').delete()
 

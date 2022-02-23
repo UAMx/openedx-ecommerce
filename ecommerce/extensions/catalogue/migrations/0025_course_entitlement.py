@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
+
 
 from django.db import migrations, models
 from oscar.core.loading import get_model
@@ -15,30 +15,36 @@ ProductClass = get_model("catalogue", "ProductClass")
 
 def create_product_class(apps, schema_editor):
     """ Create a course entitlement product class """
+    for klass in (Category, ProductAttribute, ProductClass):
+        klass.skip_history_when_saving = True
 
     # Create a new product class for course entitlement
-    course_entitlement = ProductClass.objects.create(
+    course_entitlement = ProductClass(
         track_stock=False,
         requires_shipping=False,
         name=COURSE_ENTITLEMENT_PRODUCT_CLASS_NAME,
         slug=slugify(COURSE_ENTITLEMENT_PRODUCT_CLASS_NAME)
     )
+    course_entitlement.save()
 
     # Create product attributes for course entitlement products
-    ProductAttribute.objects.create(
+    pa1 = ProductAttribute(
         product_class=course_entitlement,
         name="course_key",
         code="course_key",
         type="text",
         required=True
     )
-    ProductAttribute.objects.create(
+    pa1.save()
+
+    pa2 = ProductAttribute(
         product_class=course_entitlement,
         name="certificate_type",
         code="certificate_type",
         type="text",
         required=False
     )
+    pa2.save()
 
     # Create a category for course entitlements
     Category.add_root(
@@ -51,6 +57,10 @@ def create_product_class(apps, schema_editor):
 
 def remove_product_class(apps, schema_editor):
     """ Reverse function. """
+    # ProductAttribute is needed for cascading delete
+    for klass in (Product, Category, ProductAttribute, ProductClass):
+        klass.skip_history_when_saving = True
+
     Product.objects.filter(product_class=ProductClass.objects.get(name=COURSE_ENTITLEMENT_PRODUCT_CLASS_NAME)).delete()
     Category.objects.filter(slug='course_entitlements').delete()
     ProductClass.objects.filter(name=COURSE_ENTITLEMENT_PRODUCT_CLASS_NAME).delete()

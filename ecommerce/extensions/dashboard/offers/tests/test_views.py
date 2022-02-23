@@ -1,4 +1,4 @@
-from __future__ import unicode_literals
+
 
 import json
 
@@ -22,7 +22,7 @@ class OfferWizardTests(TestCase):
         site_configuration = SiteConfigurationFactory()
         site = site_configuration.site
 
-        self.assertEqual(ConditionalOffer.objects.count(), 0)
+        self.assertEqual(ConditionalOffer.objects.exclude(name='dynamic_conditional_offer').count(), 0)
 
         # Start creating the offer by defining by setting the name and site
         metadata = {
@@ -50,7 +50,7 @@ class OfferWizardTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response['Location'], reverse('dashboard:offer-condition'))
 
-        # Set the restrictions on the offer
+        # Set the conditions on the offer
         restrictions_url = reverse('dashboard:offer-restrictions')
         data = {
             'range': offer_range.id,
@@ -65,13 +65,16 @@ class OfferWizardTests(TestCase):
         response = self.client.get(metadata_url)
         self.assertEqual(response.status_code, 200)
 
-        # Finish saving the offer
-        data = {}
+        # Finish saving the offer by setting the restrictions
+        data = {
+            'priority': 0,
+            'exclusive': True
+        }
         response = self.client.post(restrictions_url, data)
         self.assertEqual(response.status_code, 302)
 
-        self.assertEqual(ConditionalOffer.objects.count(), 1)
-        offer = ConditionalOffer.objects.first()
+        self.assertEqual(ConditionalOffer.objects.exclude(name='dynamic_conditional_offer').count(), 1)
+        offer = ConditionalOffer.objects.exclude(name='dynamic_conditional_offer').first()
         self.assertEqual(response['Location'], reverse('dashboard:offer-detail', kwargs={'pk': offer.pk}))
 
         # Ensure the offer is associated to the partner set in the first step of the wizard

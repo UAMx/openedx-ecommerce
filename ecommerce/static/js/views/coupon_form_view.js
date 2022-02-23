@@ -123,7 +123,10 @@ define([
                     }
                 },
                 'input[name=benefit_value]': {
-                    observe: 'benefit_value'
+                    observe: 'benefit_value',
+                    onSet: function(val) {
+                        return parseInt(val, 10);
+                    }
                 },
                 'input[name=quantity]': {
                     observe: 'quantity'
@@ -205,6 +208,12 @@ define([
                         }
                         return val;
                     }
+                },
+                'input[name=sales_force_id]': {
+                    observe: 'sales_force_id',
+                    onSet: function(val) {
+                        return val === '' ? null : val;
+                    }
                 }
             },
 
@@ -250,31 +259,11 @@ define([
                         };
                     }
                 },
-                'select[name=enterprise_customer]': {
+                'input[name=enterprise_customer]': {
                     observe: 'enterprise_customer',
-                    selectOptions: {
-                        collection: function() {
-                            return ecommerce.coupons.enterprise_customers;
-                        },
-                        defaultOption: {id: '', name: ''},
-                        labelPath: 'name',
-                        valuePath: 'id'
-                    },
-                    setOptions: {
-                        validate: true
-                    },
                     onGet: function(val) {
                         return _.isUndefined(val) || _.isNull(val) ? '' : val.id;
-                    },
-                    onSet: function(val) {
-                        return {
-                            id: val,
-                            name: $('select[name=enterprise_customer] option:selected').text()
-                        };
                     }
-                },
-                'input[name=enterprise_customer_catalog]': {
-                    observe: 'enterprise_customer_catalog'
                 },
                 'input[name=program_uuid]': {
                     observe: 'program_uuid'
@@ -311,8 +300,6 @@ define([
                     'course_seat_types',
                     'course_catalog',
                     'end_date',
-                    'enterprise_customer',
-                    'enterprise_customer_catalog',
                     'invoice_discount_type',
                     'invoice_discount_value',
                     'invoice_number',
@@ -325,7 +312,8 @@ define([
                     'start_date',
                     'tax_deducted_source',
                     'title',
-                    'email_domains'
+                    'email_domains',
+                    'sales_force_id'
                 ];
             },
 
@@ -502,11 +490,9 @@ define([
 
             toggleEnterpriseRelatedFields: function(hide) {
                 this.formGroup('[name=enterprise_customer]').toggleClass(this.hiddenClass, hide);
-                this.formGroup('[name=enterprise_customer_catalog]').toggleClass(this.hiddenClass, hide);
 
                 if (hide) {
                     this.model.unset('enterprise_customer');
-                    this.model.unset('enterprise_customer_catalog');
                 }
             },
 
@@ -584,7 +570,9 @@ define([
                 var maxUsesFieldSelector = '[name=max_uses]',
                     maxUsesModelValue = this.model.get('max_uses'),
                     multiUseMaxUsesValue = this.editing ? maxUsesModelValue : null,
+                    numUsesModelValue = this.model.get('num_uses'),
                     voucherType = this.model.get('voucher_type');
+
                 if (!this.editing) {
                     this.emptyCodeField();
                 }
@@ -607,12 +595,14 @@ define([
                     if (voucherType === 'Multi-use') {
                         this.model.set('max_uses', multiUseMaxUsesValue);
                         if (this.editing) {
-                            this.setLimitToElement(this.$(maxUsesFieldSelector), '', multiUseMaxUsesValue);
+                            // Putting number of uses (num_uses) of model as min value of max usage (max_uses) field.
+                            this.setLimitToElement(this.$(maxUsesFieldSelector), '', numUsesModelValue);
                         } else {
                             this.setLimitToElement(this.$(maxUsesFieldSelector), '', 2);
                         }
                     } else if (this.editing) {
-                        this.setLimitToElement(this.$(maxUsesFieldSelector), '', maxUsesModelValue);
+                        // Putting number of uses (num_uses) of model as min value of max usage (max_uses) field.
+                        this.setLimitToElement(this.$(maxUsesFieldSelector), '', numUsesModelValue);
                     } else {
                         this.model.set('max_uses', 1);
                         this.setLimitToElement(this.$(maxUsesFieldSelector), '', 1);
@@ -748,9 +738,13 @@ define([
             render: function() {
                 // Render the parent form/template
                 var catalogId = '';
-                var customerId = '';
+                var enterpriseCustomer = this.model.get('enterprise_customer');
 
-                this.$el.html(this.template(this.model.attributes));
+                this.$el.html(
+                    this.template(
+                        _.extend({}, this.model.attributes, {editing: this.editing})
+                    )
+                );
                 this.stickit();
 
                 this.toggleCatalogTypeField();
@@ -771,10 +765,8 @@ define([
                         catalogId = this.model.get('course_catalog');
                         this.model.set('course_catalog', ecommerce.coupons.catalogs.get(catalogId));
                     }
-                    if (_.isString(this.model.get('enterprise_customer'))) {
-                        // API returns a string value for enterprise customer
-                        customerId = this.model.get('enterprise_customer');
-                        this.model.set('enterprise_customer', {id: customerId});
+                    if (_.isUndefined(enterpriseCustomer) || _.isNull(enterpriseCustomer)) {
+                        this.formGroup('#enterprise-customer').remove();
                     }
                     if (this.model.get('program_uuid')) {
                         this.$('.catalog-type input').attr('disabled', true);

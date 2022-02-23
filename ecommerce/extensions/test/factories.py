@@ -1,23 +1,49 @@
+
+
+import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import factory
 from django.utils.timezone import now
+from faker import Faker
+from oscar.test.factories import Basket, BenefitFactory
 from oscar.test.factories import ConditionalOfferFactory as BaseConditionalOfferFactory
+from oscar.test.factories import (
+    ConditionFactory,
+    D,
+    Free,
+    OrderCreator,
+    OrderTotalCalculator,
+    ProductFactory,
+    RangeFactory
+)
 from oscar.test.factories import VoucherFactory as BaseVoucherFactory
-from oscar.test.factories import *  # pylint:disable=wildcard-import,unused-wildcard-import
+from oscar.test.factories import create_product, create_stockrecord, get_class, get_model
 
 from ecommerce.enterprise.benefits import BENEFIT_MAP as ENTERPRISE_BENEFIT_MAP
 from ecommerce.enterprise.benefits import EnterpriseAbsoluteDiscountBenefit, EnterprisePercentageDiscountBenefit
 from ecommerce.enterprise.conditions import AssignableEnterpriseCustomerCondition, EnterpriseCustomerCondition
-from ecommerce.extensions.offer.models import OFFER_PRIORITY_ENTERPRISE, OFFER_PRIORITY_VOUCHER, OfferAssignment
-# TODO: journals dependency
-from ecommerce.journals.benefits import JournalBundleAbsoluteDiscountBenefit, JournalBundlePercentageDiscountBenefit
-from ecommerce.journals.conditions import JournalBundleCondition
+from ecommerce.extensions.offer.constants import DAY3, DAY10, DAY19
+from ecommerce.extensions.offer.dynamic_conditional_offer import DynamicPercentageDiscountBenefit
+from ecommerce.extensions.offer.models import (
+    OFFER_PRIORITY_ENTERPRISE,
+    OFFER_PRIORITY_MANUAL_ORDER,
+    OFFER_PRIORITY_VOUCHER,
+    CodeAssignmentNudgeEmails,
+    CodeAssignmentNudgeEmailTemplates,
+    OfferAssignment
+)
+from ecommerce.extensions.order.benefits import ManualEnrollmentOrderDiscountBenefit
+from ecommerce.extensions.order.conditions import ManualEnrollmentOrderDiscountCondition
+from ecommerce.extensions.payment.models import SDNFallbackData, SDNFallbackMetadata
 from ecommerce.programs.benefits import AbsoluteDiscountBenefitWithoutRange, PercentageDiscountBenefitWithoutRange
 from ecommerce.programs.conditions import ProgramCourseRunSeatsCondition
 from ecommerce.programs.custom import class_path
-from ecommerce.tests.factories import SiteConfigurationFactory
+from ecommerce.tests.factories import SiteConfigurationFactory, UserFactory
+
+logger = logging.getLogger('faker')
+logger.setLevel(logging.INFO)  # Quiet down faker locale messages in tests.
 
 Benefit = get_model('offer', 'Benefit')
 Catalog = get_model('catalogue', 'Catalog')
@@ -95,10 +121,10 @@ def prepare_voucher(code='COUPONTEST', _range=None, start_datetime=None, end_dat
         product = ProductFactory(categories=[])
 
     if start_datetime is None:
-        start_datetime = now() - datetime.timedelta(days=1)
+        start_datetime = now() - timedelta(days=1)
 
     if end_datetime is None:
-        end_datetime = now() + datetime.timedelta(days=10)
+        end_datetime = now() + timedelta(days=10)
 
     voucher = VoucherFactory(
         code=code,
@@ -135,10 +161,10 @@ def prepare_enterprise_voucher(code='COUPONTEST', start_datetime=None, end_datet
                                enterprise_customer=None, enterprise_customer_catalog=None):
     """ Helper function to create a voucher and add an enterprise conditional offer to it. """
     if start_datetime is None:
-        start_datetime = now() - datetime.timedelta(days=1)
+        start_datetime = now() - timedelta(days=1)
 
     if end_datetime is None:
-        end_datetime = now() + datetime.timedelta(days=10)
+        end_datetime = now() + timedelta(days=10)
 
     voucher = VoucherFactory(
         code=code,
@@ -199,7 +225,7 @@ class ProgramCourseRunSeatsConditionFactory(ConditionFactory):
     program_uuid = factory.LazyFunction(uuid.uuid4)
     proxy_class = class_path(ProgramCourseRunSeatsCondition)
 
-    class Meta(object):
+    class Meta:
         model = ProgramCourseRunSeatsCondition
 
 
@@ -234,15 +260,40 @@ class EnterpriseCustomerConditionFactory(ConditionFactory):
     enterprise_customer_catalog_uuid = factory.LazyFunction(uuid.uuid4)
     proxy_class = class_path(EnterpriseCustomerCondition)
 
-    class Meta(object):
+    class Meta:
         model = EnterpriseCustomerCondition
 
 
 class AssignableEnterpriseCustomerConditionFactory(ConditionFactory):
     proxy_class = class_path(AssignableEnterpriseCustomerCondition)
 
-    class Meta(object):
+    class Meta:
         model = AssignableEnterpriseCustomerCondition
+
+
+class ManualEnrollmentOrderDiscountConditionFactory(ConditionFactory):
+    proxy_class = class_path(ManualEnrollmentOrderDiscountCondition)
+    enterprise_customer_uuid = factory.LazyFunction(uuid.uuid4)
+
+    class Meta:
+        model = ManualEnrollmentOrderDiscountCondition
+
+
+class ManualEnrollmentOrderDiscountBenefitFactory(BenefitFactory):
+    range = None
+    type = ''
+    value = 100
+    max_affected_items = 1
+    proxy_class = class_path(ManualEnrollmentOrderDiscountBenefit)
+
+
+class ManualEnrollmentOrderOfferFactory(ConditionalOfferFactory):
+    benefit = factory.SubFactory(ManualEnrollmentOrderDiscountBenefitFactory)
+    condition = factory.SubFactory(ManualEnrollmentOrderDiscountConditionFactory)
+    max_basket_applications = None
+    offer_type = ConditionalOffer.USER
+    priority = OFFER_PRIORITY_MANUAL_ORDER
+    status = ConditionalOffer.OPEN
 
 
 class EnterpriseOfferFactory(ConditionalOfferFactory):
@@ -252,6 +303,7 @@ class EnterpriseOfferFactory(ConditionalOfferFactory):
     offer_type = ConditionalOffer.SITE
     priority = OFFER_PRIORITY_ENTERPRISE
     status = ConditionalOffer.OPEN
+    emails_for_usage_alert = 'example_1@example.com, example_2@example.com'
 
 
 class OfferAssignmentFactory(factory.DjangoModelFactory):
@@ -259,43 +311,53 @@ class OfferAssignmentFactory(factory.DjangoModelFactory):
     code = factory.Sequence(lambda n: 'VOUCHERCODE{number}'.format(number=n))
     user_email = factory.Sequence(lambda n: 'example_%s@example.com' % n)
 
-    class Meta(object):
+    class Meta:
         model = OfferAssignment
 
 
-# TODO: journals dependency
-class JournalAbsoluteDiscountBenefitFactory(BenefitFactory):
+class DynamicPercentageDiscountBenefitFactory(BenefitFactory):
     range = None
     type = ''
-    value = 10
-    proxy_class = class_path(JournalBundleAbsoluteDiscountBenefit)
+    value = 1
+    proxy_class = class_path(DynamicPercentageDiscountBenefit)
 
 
-# TODO: journals dependency
-class JournalPercentageDiscountBenefitFactory(BenefitFactory):
-    range = None
-    type = ''
-    value = 10
-    proxy_class = class_path(JournalBundlePercentageDiscountBenefit)
+class CodeAssignmentNudgeEmailTemplatesFactory(factory.DjangoModelFactory):
+    email_greeting = factory.Faker('sentence')
+    email_closing = factory.Faker('sentence')
+    email_subject = factory.Faker('sentence')
+    name = factory.Faker('name')
+    email_type = factory.fuzzy.FuzzyChoice((DAY3, DAY10, DAY19))
+
+    class Meta:
+        model = CodeAssignmentNudgeEmailTemplates
 
 
-# TODO: journals dependency
-class JournalConditionFactory(ConditionFactory):
-    range = None
-    type = ''
-    value = None
-    journal_bundle_uuid = factory.LazyFunction(uuid.uuid4)
-    proxy_class = class_path(JournalBundleCondition)
+class CodeAssignmentNudgeEmailsFactory(factory.DjangoModelFactory):
+    email_template = factory.SubFactory(CodeAssignmentNudgeEmailTemplatesFactory)
+    user_email = factory.Sequence(lambda n: 'learner_%s@example.com' % n)
+    email_date = datetime.now()
 
-    class Meta(object):
-        model = JournalBundleCondition
+    class Meta:
+        model = CodeAssignmentNudgeEmails
 
 
-# TODO: journals dependency
-class JournalBundleOfferFactory(ConditionalOfferFactory):
-    benefit = factory.SubFactory(JournalPercentageDiscountBenefitFactory)
-    condition = factory.SubFactory(JournalConditionFactory)
-    max_basket_applications = 1
-    offer_type = ConditionalOffer.SITE
-    priority = OFFER_PRIORITY_ENTERPRISE
-    status = ConditionalOffer.OPEN
+class SDNFallbackMetadataFactory(factory.DjangoModelFactory):
+    class Meta:
+        model = SDNFallbackMetadata
+
+    file_checksum = factory.Sequence(lambda n: Faker().md5())
+    import_state = 'New'
+    download_timestamp = datetime.now() - timedelta(days=10)
+
+
+class SDNFallbackDataFactory(factory.DjangoModelFactory):
+    class Meta:
+        model = SDNFallbackData
+
+    sdn_fallback_metadata = factory.SubFactory(SDNFallbackMetadataFactory)
+    source = "Specially Designated Nationals (SDN) - Treasury Department"
+    sdn_type = "Individual"
+    names = factory.Faker('name')
+    addresses = factory.Faker('address')
+    countries = factory.Faker('country_code')

@@ -1,5 +1,5 @@
 """Voucher Utility Methods. """
-from __future__ import unicode_literals
+
 
 import base64
 import datetime
@@ -26,7 +26,7 @@ from ecommerce.enterprise.utils import get_enterprise_customer
 from ecommerce.extensions.api import exceptions
 from ecommerce.extensions.offer.constants import OFFER_MAX_USES_DEFAULT
 from ecommerce.extensions.offer.models import OFFER_PRIORITY_VOUCHER
-from ecommerce.extensions.offer.utils import get_discount_percentage, get_discount_value
+from ecommerce.extensions.offer.utils import get_benefit_type, get_discount_percentage, get_discount_value
 from ecommerce.invoice.models import Invoice
 from ecommerce.programs.conditions import ProgramCourseRunSeatsCondition
 from ecommerce.programs.constants import BENEFIT_MAP
@@ -46,6 +46,7 @@ Range = get_model('offer', 'Range')
 StockRecord = get_model('partner', 'StockRecord')
 Voucher = get_model('voucher', 'Voucher')
 VoucherApplication = get_model('voucher', 'VoucherApplication')
+VoucherOffer = get_model('voucher', 'Voucher_offers')
 
 
 def _add_redemption_course_ids(new_row_to_append, header_row, redemption_course_ids):
@@ -69,8 +70,7 @@ def _get_voucher_status(voucher, offer):
 
     datetime_now = datetime.datetime.now(pytz.UTC)
     not_expired = (
-        voucher.start_datetime < datetime_now and
-        voucher.end_datetime > datetime_now
+        voucher.end_datetime > datetime_now > voucher.start_datetime
     )
     if not_expired:
         status = _('Redeemed') if not offer.is_available() else _('Active')
@@ -100,6 +100,24 @@ def _get_discount_info(discount_data):
     return None, None, None
 
 
+def _get_course_id_and_organization(seat_stockrecord):
+    """
+    Return course_id and organization of given product
+
+    Arguments:
+        seat_stockrecord: stock record from offer catalogue
+
+    Returns
+        course_id (str or None if entitlement)
+        course_organization (str or None if entitlement)
+    """
+    if seat_stockrecord.product.is_course_entitlement_product:
+        return None, None
+    course_id = seat_stockrecord.product.attr.course_key
+    course_organization = CourseKey.from_string(course_id).org
+    return course_id, course_organization
+
+
 def _get_info_for_coupon_report(coupon, voucher):
     created_date = coupon.date_updated.strftime("%b %d, %y") if coupon.date_updated else 'N/A'
     category_name = ProductCategory.objects.get(product=coupon).category.name
@@ -126,8 +144,7 @@ def _get_info_for_coupon_report(coupon, voucher):
         course_id = None
     elif offer_range and offer_range.catalog:
         seat_stockrecord = offer_range.catalog.stock_records.first()
-        course_id = seat_stockrecord.product.attr.course_key
-        course_organization = CourseKey.from_string(course_id).org
+        course_id, course_organization = _get_course_id_and_organization(seat_stockrecord)
     elif offer_range and offer_range.catalog_query:
         catalog_query = offer_range.catalog_query
         course_id = None
@@ -138,7 +155,7 @@ def _get_info_for_coupon_report(coupon, voucher):
         discount_data = get_voucher_discount_info(benefit, seat_stockrecord.price_excl_tax)
         coupon_type, discount_percentage, discount_amount = _get_discount_info(discount_data)
     else:
-        benefit_type = benefit.type or getattr(benefit.proxy(), 'benefit_class_type', None)
+        benefit_type = get_benefit_type(benefit)
 
         if benefit_type == Benefit.PERCENTAGE:
             coupon_type = _('Discount') if benefit.value < 100 else _('Enrollment')
@@ -209,6 +226,27 @@ def _get_voucher_info_for_coupon_report(voucher):
     return coupon_data
 
 
+def _get_redemption_course_ids(voucher_application):
+    """
+    Return list of course ids where voucher is applied
+    Args:
+        voucher_application: voucher application object
+
+    Returns:
+         list of course ids where voucher is applied.
+    """
+    redemption_course_ids = []
+    for line in voucher_application.order.lines.all():
+        if line.product:
+            if line.product.is_course_entitlement_product:
+                redemption_course_ids.append(line.product.attr.UUID)
+            else:
+                redemption_course_ids.append(line.product.course_id)
+        else:
+            redemption_course_ids.append('Unknown')
+    return redemption_course_ids
+
+
 def generate_coupon_report(coupon_vouchers):
     """
     Generate coupon report data
@@ -271,11 +309,8 @@ def generate_coupon_report(coupon_vouchers):
                     voucher=voucher).prefetch_related('user', 'order__lines')
 
                 for application in voucher_applications:
-                    redemption_course_ids = []
+                    redemption_course_ids = _get_redemption_course_ids(application)
                     redemption_user_username = application.user.username
-
-                    for line in application.order.lines.all():
-                        redemption_course_ids.append(line.product.course_id)
 
                     new_row = row.copy()
                     _add_redemption_course_ids(new_row, rows[0], redemption_course_ids)
@@ -416,14 +451,21 @@ def get_or_create_enterprise_offer(
     enterprise_customer_object = get_enterprise_customer(site, enterprise_customer) if site else {}
     enterprise_customer_name = enterprise_customer_object.get('name', '')
 
-    condition, __ = Condition.objects.get_or_create(
-        proxy_class=class_path(AssignableEnterpriseCustomerCondition),
-        enterprise_customer_uuid=enterprise_customer,
-        enterprise_customer_name=enterprise_customer_name,
-        enterprise_customer_catalog_uuid=enterprise_customer_catalog,
-        type=Condition.COUNT,
-        value=1,
-    )
+    condition_kwargs = {
+        'proxy_class': class_path(AssignableEnterpriseCustomerCondition),
+        'enterprise_customer_uuid': enterprise_customer,
+        'enterprise_customer_name': enterprise_customer_name,
+        'enterprise_customer_catalog_uuid': enterprise_customer_catalog,
+        'type': Condition.COUNT,
+        'value': 1,
+    }
+
+    # Because there is a chance of duplicate Conditions, we are checking here for this case.
+    # If duplicates are encountered, then grab the first matching Condition.
+    try:
+        condition, __ = Condition.objects.get_or_create(**condition_kwargs)
+    except Condition.MultipleObjectsReturned:
+        condition = Condition.objects.filter(**condition_kwargs).first()
 
     benefit, _ = Benefit.objects.get_or_create(
         proxy_class=class_path(ENTERPRISE_BENEFIT_MAP[benefit_type]),
@@ -439,9 +481,7 @@ def get_or_create_enterprise_offer(
         'email_domains': email_domains,
         'site': site,
         'partner': site.siteconfiguration.partner if site else None,
-        # For initial creation, we are setting the priority lower so that we don't want to use these
-        # until we've done some other implementation work. We will update this to a higher value later.
-        'priority': 5,
+        'priority': OFFER_PRIORITY_VOUCHER,
     }
     offer, __ = ConditionalOffer.objects.update_or_create(name=offer_name, defaults=offer_kwargs)
 
@@ -465,8 +505,8 @@ def _generate_code_string(length):
         raise ValueError("Voucher code length must be a positive number.")
 
     h = hashlib.sha256()
-    h.update(uuid.uuid4().get_bytes())
-    voucher_code = base64.b32encode(h.digest())[0:length]
+    h.update(uuid.uuid4().bytes)
+    voucher_code = base64.b32encode(h.digest())[0:length].decode('utf-8')
     if Voucher.objects.filter(code__iexact=voucher_code).exists():
         return _generate_code_string(length)
 
@@ -506,6 +546,62 @@ def create_new_voucher(code, end_datetime, name, start_datetime, voucher_type):
     )
 
     return voucher
+
+
+def create_vouchers_and_attach_offers(
+        code,
+        end_datetime,
+        enterprise_customer,
+        enterprise_offers,
+        name,
+        offers,
+        quantity,
+        start_datetime,
+        voucher_type
+):
+    """
+    Create vouchers and attach offers with them.
+
+    Arguments:
+        code (str): Code associated with vouchers. Defaults to None.
+        end_datetime (datetime): End date for voucher offer.
+        enterprise_customer (str): UUID of an EnterpriseCustomer attached to this voucher
+        enterprise_offers (ConditionalOffer): List of enterprise offers.
+        name (str): Voucher name.
+        offers (ConditionalOffer): List of offers.
+        quantity (int): Number of vouchers to be created.
+        start_datetime (datetime): Start date for voucher offer.
+        voucher_type (str): Type of voucher.
+
+    Returns:
+        List[Voucher]
+    """
+    vouchers = []
+    voucher_offers = []
+    enterprise_voucher_offers = []
+    for i in range(quantity):
+        voucher = create_new_voucher(
+            end_datetime=end_datetime,
+            start_datetime=start_datetime,
+            voucher_type=voucher_type,
+            code=code,
+            name=name
+        )
+        voucher_offers.append(
+            VoucherOffer(voucher=voucher, conditionaloffer=offers[i] if len(offers) > 1 else offers[0])
+        )
+        if enterprise_customer and enterprise_offers:
+            enterprise_voucher_offers.append(
+                VoucherOffer(
+                    voucher=voucher,
+                    conditionaloffer=enterprise_offers[i] if len(enterprise_offers) > 1 else enterprise_offers[0]
+                )
+            )
+        vouchers.append(voucher)
+
+    VoucherOffer.objects.bulk_create(voucher_offers)
+    VoucherOffer.objects.bulk_create(enterprise_voucher_offers)
+    return vouchers
 
 
 def validate_voucher_fields(
@@ -601,19 +697,17 @@ def create_enterprise_vouchers(
         )
         offers.append(offer)
 
-    vouchers = []
-    for i in range(quantity):
-        voucher = create_new_voucher(
-            end_datetime=end_datetime,
-            start_datetime=start_datetime,
-            voucher_type=voucher_type,
-            code=code,
-            name=name
-        )
-        voucher.offers.add(offers[i] if len(offers) > 1 else offers[0])
-        vouchers.append(voucher)
-
-    return vouchers
+    return create_vouchers_and_attach_offers(
+        code,
+        end_datetime,
+        enterprise_customer,
+        [],
+        name,
+        offers,
+        quantity,
+        start_datetime,
+        voucher_type
+    )
 
 
 def create_vouchers(
@@ -639,7 +733,7 @@ def create_vouchers(
         site=None,
 ):
     """
-    Create vouchers.
+    Create offers and vouchers.
 
     Arguments:
         benefit_type (str): Type of benefit associated with vouchers.
@@ -668,7 +762,6 @@ def create_vouchers(
         List[Voucher]
     """
     logger.info("Creating [%d] vouchers product [%s]", quantity, coupon.id)
-    vouchers = []
     offers = []
     enterprise_offers = []
 
@@ -744,20 +837,17 @@ def create_vouchers(
             )
             enterprise_offers.append(enterprise_offer)
 
-    for i in range(quantity):
-        voucher = create_new_voucher(
-            end_datetime=end_datetime,
-            start_datetime=start_datetime,
-            voucher_type=voucher_type,
-            code=code,
-            name=name
-        )
-        voucher.offers.add(offers[i] if len(offers) > 1 else offers[0])
-        if enterprise_customer:
-            voucher.offers.add(enterprise_offers[i] if len(enterprise_offers) > 1 else enterprise_offers[0])
-        vouchers.append(voucher)
-
-    return vouchers
+    return create_vouchers_and_attach_offers(
+        code,
+        end_datetime,
+        enterprise_customer,
+        enterprise_offers,
+        name,
+        offers,
+        quantity,
+        start_datetime,
+        voucher_type
+    )
 
 
 def get_voucher_discount_info(benefit, price):
@@ -779,27 +869,25 @@ def get_voucher_discount_info(benefit, price):
             return {
                 'discount_percentage': benefit_value,
                 'discount_value': get_discount_value(discount_percentage=benefit_value, product_price=price),
-                'is_discounted': True if benefit.value < 100 else False
+                'is_discounted': benefit.value < 100
             }
+
+        discount_percentage = get_discount_percentage(discount_value=benefit_value, product_price=price)
+        if discount_percentage > 100:
+            discount_percentage = 100.00
+            discount_value = price
         else:
-            discount_percentage = get_discount_percentage(discount_value=benefit_value, product_price=price)
-            if discount_percentage > 100:
-                discount_percentage = 100.00
-                discount_value = price
-            else:
-                discount_percentage = discount_percentage
-                discount_value = benefit_value
-            return {
-                'discount_percentage': discount_percentage,
-                'discount_value': float(discount_value),
-                'is_discounted': True if discount_percentage < 100 else False,
-            }
-    else:
+            discount_value = benefit_value
         return {
-            'discount_percentage': 0.00,
-            'discount_value': 0.00,
-            'is_discounted': False
+            'discount_percentage': discount_percentage,
+            'discount_value': float(discount_value),
+            'is_discounted': discount_percentage < 100,
         }
+    return {
+        'discount_percentage': 0.00,
+        'discount_value': 0.00,
+        'is_discounted': False
+    }
 
 
 def update_voucher_with_enterprise_offer(offer, benefit_value, enterprise_customer, benefit_type=None,
@@ -826,9 +914,7 @@ def update_voucher_with_enterprise_offer(offer, benefit_value, enterprise_custom
     """
     return get_or_create_enterprise_offer(
         benefit_value=benefit_value or offer.benefit.value,
-        benefit_type=benefit_type or offer.benefit.type or getattr(
-            offer.benefit.proxy(), 'benefit_class_type', None
-        ),
+        benefit_type=benefit_type or get_benefit_type(offer.benefit),
         enterprise_customer=enterprise_customer or offer.condition.enterprise_customer_uuid,
         enterprise_customer_catalog=enterprise_catalog or offer.condition.enterprise_customer_catalog_uuid,
         offer_name=offer.name,
@@ -862,9 +948,7 @@ def update_voucher_offer(offer, benefit_value, benefit_type=None, max_uses=None,
     return _get_or_create_offer(
         product_range=offer.benefit.range,
         benefit_value=benefit_value or offer.benefit.value,
-        benefit_type=benefit_type or offer.benefit.type or getattr(
-            offer.benefit.proxy(), 'benefit_class_type', None
-        ),
+        benefit_type=benefit_type or get_benefit_type(offer.benefit),
         offer_name=offer.name,
         max_uses=max_uses,
         email_domains=email_domains,
@@ -888,7 +972,7 @@ def get_cached_voucher(code):
         Voucher.DoesNotExist: When no vouchers with provided code exist.
     """
     voucher_code = 'voucher_{code}'.format(code=code)
-    cache_key = hashlib.md5(voucher_code).hexdigest()
+    cache_key = hashlib.md5(voucher_code.encode('utf-8')).hexdigest()
     voucher_cached_response = TieredCache.get_cached_response(cache_key)
     if voucher_cached_response.is_found:
         return voucher_cached_response.value
@@ -917,6 +1001,7 @@ def get_voucher_and_products_from_code(code):
     voucher = get_cached_voucher(code)
     voucher_range = voucher.best_offer.benefit.range
     has_catalog_configuration = voucher_range and (voucher_range.catalog_query or voucher_range.course_catalog)
+    # pylint: disable=consider-using-ternary
     is_enterprise = ((voucher_range and voucher_range.enterprise_customer) or
                      voucher.best_offer.condition.enterprise_customer_uuid)
     products = voucher_range.all_products() if voucher_range else []
@@ -924,5 +1009,4 @@ def get_voucher_and_products_from_code(code):
     if products or has_catalog_configuration or is_enterprise:
         # List of products is empty in case of Multi-course coupon
         return voucher, products
-    else:
-        raise exceptions.ProductNotFoundError()
+    raise exceptions.ProductNotFoundError()

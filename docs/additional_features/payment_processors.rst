@@ -1,5 +1,8 @@
 Payment Processors
 ##################
+
+.. warning:: As of 8/2019, with the introduction of the Payment microfrontend (MFE), the payment processors can no longer be enabled or disabled for the frontend as documented below. At this time, CyberSource, Paypal, and Apple Pay processing is baked into the Payment MFE.
+
 Payment processors/gateways handle the acceptance/validation of payment data--credit cards, wallet payments, etc.--and
 transfer of funds from learners to merchants. At edx.org, we use CyberSource to accept credit card payments, and PayPal
 to accept PayPal payments (made from either the learner's PayPal account, bank account, or credit card). The codebase
@@ -167,8 +170,8 @@ environment in which you are operating.
                 # Generate this at EBC: Account Management > Transaction Security Keys > SOAP Toolkit API
                 'transaction_key': '',
 
-                # Production: https://ics2wsa.ic3.com/commerce/1.x/transactionProcessor/CyberSourceTransaction_1.115.wsdl
-                'soap_api_url': 'https://ics2wstest.ic3.com/commerce/1.x/transactionProcessor/CyberSourceTransaction_1.115.wsdl',
+                # Production: https://ics2wsa.ic3.com/commerce/1.x/transactionProcessor/CyberSourceTransaction_1.166.wsdl
+                'soap_api_url': 'https://ics2wstest.ic3.com/commerce/1.x/transactionProcessor/CyberSourceTransaction_1.166.wsdl',
 
                 # Use the default value in settings/base.py or Ansible
                 'cancel_checkout_path': PAYMENT_PROCESSOR_CANCEL_PATH,

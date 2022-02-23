@@ -1,3 +1,5 @@
+
+
 from django.conf import settings
 from django.test import override_settings
 from django.urls import reverse
@@ -22,7 +24,7 @@ class ApplePayMerchantDomainAssociationViewTests(LoginMixin, TestCase):
 
     def assert_response_matches(self, response, expected_status_code, expected_content):
         self.assertEqual(response.status_code, expected_status_code)
-        self.assertEqual(response.content, expected_content)
+        self.assertEqual(response.content.decode('utf-8'), expected_content)
         self.assertEqual(response['Content-Type'], 'text/plain')
 
     @override_settings()

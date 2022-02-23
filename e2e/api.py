@@ -1,3 +1,5 @@
+
+
 from edx_rest_api_client.client import EdxRestApiClient
 
 from e2e.config import (
@@ -10,7 +12,7 @@ from e2e.config import (
 )
 
 
-class BaseApi(object):
+class BaseApi:
     api_url_root = None
     append_slash = True
 

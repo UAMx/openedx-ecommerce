@@ -1,9 +1,10 @@
-from __future__ import unicode_literals
+
 
 import json
 import logging
 
 import ddt
+import mock
 from django.test.utils import override_settings
 from django.urls import reverse
 from testfixtures import LogCapture
@@ -12,6 +13,7 @@ from ecommerce.extensions.offer.constants import OFFER_ASSIGNED, OFFER_ASSIGNMEN
 from ecommerce.extensions.offer.models import OfferAssignment, OfferAssignmentEmailAttempt
 from ecommerce.extensions.test import factories
 from ecommerce.tests.testcases import TestCase
+from ecommerce.tests.utils import DoesNotExist
 
 
 @ddt.ddt
@@ -51,7 +53,7 @@ class AssignmentEmailStatusTests(TestCase):
                 'error': 'OfferAssignment matching query does not exist.'
             },
             ("[Offer Assignment] AssignmentEmailStatus update raised: "
-             "DoesNotExist('OfferAssignment matching query does not exist.',)"),
+             "{}".format(repr(DoesNotExist('OfferAssignment matching query does not exist.')))),
             500,
         ),
         (
@@ -84,13 +86,13 @@ class AssignmentEmailStatusTests(TestCase):
         requisite keys are not present in offer_assignment model
         """
         log_name = 'ecommerce.extensions.api.v2.views.assignmentemail'
-        with LogCapture(level=logging.INFO) as log:
+        with LogCapture(log_name, level=logging.INFO) as log:
             response = self.client.post(self.path, data=json.dumps(post_data), content_type='application/json')
-        log.check(
+        log.check_present(
             (log_name, 'ERROR', log_data),
         )
         self.assertEqual(response.status_code, status_code)
-        self.assertDictEqual(response_data, json.loads(response.content))
+        self.assertDictEqual(response_data, response.json())
 
     @ddt.data(
         (
@@ -127,7 +129,7 @@ class AssignmentEmailStatusTests(TestCase):
         response_data['offer_assignment_id'] = offer_assignment.id
         response = self.client.post(self.path, data=json.dumps(post_data), content_type='application/json')
         self.assertEqual(response.status_code, status_code)
-        self.assertDictEqual(response_data, json.loads(response.content))
+        self.assertDictEqual(response_data, response.json())
         updated_offer_assignment = OfferAssignment.objects.get(id=offer_assignment.id)
         self.assertEqual(updated_offer_assignment.status, OFFER_ASSIGNED)
 
@@ -136,6 +138,7 @@ class AssignmentEmailStatusTests(TestCase):
 class AssignmentEmailBounceTests(TestCase):
     """ Tests for AssignmentEmailBounce API view. """
     path = reverse('api:v2:assignment-email:receive_bounce')
+    log_name = 'ecommerce.extensions.api.v2.views.assignmentemail'
 
     def setUp(self):
         super(AssignmentEmailBounceTests, self).setUp()
@@ -143,21 +146,6 @@ class AssignmentEmailBounceTests(TestCase):
         self.client.login(username=self.user.username, password=self.password)
 
     @ddt.data(
-        (
-            # Exception while accessing model.
-            {
-                'email': 'blashsdsd@dfsdf.com',
-                'send_id': 'WFQKQW5K3LBgi0mk',
-                'action': 'hardbounce',
-                'api_key': 'abc123',
-                'sig': '038803b239bffab4c0c72b159ba944e6',
-            },
-            {},
-            "[Offer Assignment] AssignmentEmailBounce could not update status and raised: DoesNotExist("
-            "'OfferAssignmentEmailAttempt matching query does not exist.',)",
-            400,
-            'top_secret',
-        ),
         (
             # Incorrect hash.
             {
@@ -168,9 +156,10 @@ class AssignmentEmailBounceTests(TestCase):
                 'sig': 'incorrect_hash',
             },
             {},
-            "[Offer Assignment] AssignmentEmailBounce: Message hash does not match the computed hash."
-            " Received hash: incorrect_hash, Computed hash: 038803b239bffab4c0c72b159ba944e6",
-            400,
+            "[Offer Assignment] AssignmentEmailBounce: Bounce message could not be verified."
+            " send_id: WFQKQW5K3LBgi0mk, email: blashsdsd@dfsdf.com, sig: incorrect_hash,"
+            " api_key_sailthru: abc123, api_key_local: abc123 ",
+            200,
             'top_secret',
         ),
         (
@@ -180,7 +169,7 @@ class AssignmentEmailBounceTests(TestCase):
                 'send_id': 'WFQKQW5K3LBgi0mk',
                 'action': 'hardbounce',
                 'api_key': 'abc123',
-                'sig': '038803b239bffab4c0c72b159ba944e6',
+                'sig': 'e705b3d5964e82c82136cadd68020384',
             },
             {},
             "[Offer Assignment] AssignmentEmailBounce: SAILTHRU Parameters not found",
@@ -201,15 +190,14 @@ class AssignmentEmailBounceTests(TestCase):
         Verify the endpoint logged a failure message
         when it failed to update the email status in offer_assignment
         """
-        log_name = 'ecommerce.extensions.api.v2.views.assignmentemail'
         with override_settings(SAILTHRU_SECRET=sailthru_secret):
             with LogCapture(level=logging.INFO) as log:
                 response = self.client.post(self.path, data=json.dumps(post_data), content_type='application/json')
-        log.check(
-            (log_name, 'ERROR', log_data),
+        log.check_present(
+            (self.log_name, 'ERROR', log_data),
         )
         self.assertEqual(response.status_code, status_code)
-        self.assertDictEqual(response_data, json.loads(response.content))
+        self.assertDictEqual(response_data, response.json())
 
     @ddt.data(
         (
@@ -218,7 +206,7 @@ class AssignmentEmailBounceTests(TestCase):
                 'send_id': 'WFQKQW5K3LBgi0mk',
                 'action': 'hardbounce',
                 'api_key': 'abc123',
-                'sig': '038803b239bffab4c0c72b159ba944e6',
+                'sig': 'e705b3d5964e82c82136cadd68020384',
             },
             {},
             200,
@@ -229,7 +217,7 @@ class AssignmentEmailBounceTests(TestCase):
             self,
             post_data,
             response_data,
-            status_code,
+            status_code
     ):
         """ Verify the endpoint updated the email status in offer_assignment """
         enterprise_offer = factories.EnterpriseOfferFactory(max_global_applications=None)
@@ -237,12 +225,15 @@ class AssignmentEmailBounceTests(TestCase):
             offer=enterprise_offer,
             code='jfhrmndk554lwre',
             user_email='johndoe@unknown.com',
+            status=OFFER_ASSIGNED
         )
         OfferAssignmentEmailAttempt.objects.create(offer_assignment=offer_assignment, send_id=post_data.get('send_id'))
         with LogCapture(level=logging.INFO) as log:
-            response = self.client.post(self.path, data=json.dumps(post_data), content_type='application/json')
-        log.check()
+            with mock.patch("ecommerce.extensions.api.v2.views.assignmentemail.SailthruClient.receive_hardbounce_post",
+                            return_value=True):
+                response = self.client.post(self.path, data=json.dumps(post_data), content_type='application/json')
+        log.check_present()
         self.assertEqual(response.status_code, status_code)
-        self.assertDictEqual(response_data, json.loads(response.content))
+        self.assertDictEqual(response_data, response.json())
         updated_offer_assignment = OfferAssignment.objects.get(id=offer_assignment.id)
         self.assertEqual(updated_offer_assignment.status, OFFER_ASSIGNMENT_EMAIL_BOUNCED)

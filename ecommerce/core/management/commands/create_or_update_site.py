@@ -1,7 +1,4 @@
 """ Creates or updates a Site including Partner and SiteConfiguration data. """
-
-from __future__ import unicode_literals
-
 import logging
 
 from django.contrib.sites.models import Site
@@ -52,7 +49,12 @@ class Command(BaseCommand):
                             dest='lms_url_root',
                             type=str,
                             required=True,
-                            help='Root URL of LMS (e.g. https://localhost:8000)')
+                            help='Root URL of LMS (e.g. https://edx.devstack.lms:8000)')
+        parser.add_argument('--lms-public-url-root',
+                            action='store',
+                            dest='lms_public_url_root',
+                            type=str,
+                            help='Public Root URL of LMS (e.g. https://localhost:8000)')
         parser.add_argument('--payment-processors',
                             action='store',
                             dest='payment_processors',
@@ -65,18 +67,30 @@ class Command(BaseCommand):
                             type=str,
                             default='',
                             help='Payment processor used for client-side payments')
-        parser.add_argument('--client-id',
+        parser.add_argument('--sso-client-id',
                             action='store',
-                            dest='client_id',
+                            dest='sso_client_id',
                             type=str,
                             required=True,
-                            help='client ID')
-        parser.add_argument('--client-secret',
+                            help='SSO client ID for individual user auth')
+        parser.add_argument('--sso-client-secret',
                             action='store',
-                            dest='client_secret',
+                            dest='sso_client_secret',
                             type=str,
                             required=True,
-                            help='client secret')
+                            help='SSO client secret for individual user auth')
+        parser.add_argument('--backend-service-client-id',
+                            action='store',
+                            dest='backend_service_client_id',
+                            type=str,
+                            required=True,
+                            help='Backend-service client ID for IDA-to-IDA auth')
+        parser.add_argument('--backend-service-client-secret',
+                            action='store',
+                            dest='backend_service_client_secret',
+                            type=str,
+                            required=True,
+                            help='Backend-service client secret for IDA-to-IDA auth')
         parser.add_argument('--segment-key',
                             action='store',
                             dest='segment_key',
@@ -130,32 +144,26 @@ class Command(BaseCommand):
                             type=str,
                             required=True,
                             help='URL for Discovery service API calls.')
-        # TODO: journals dependency
-        parser.add_argument('--journals_api_url',
-                            action='store',
-                            dest='journals_api_url',
-                            type=str,
-                            required=False,
-                            help='URL for Journals service API calls.')
 
-    def handle(self, *args, **options):
+    def handle(self, *args, **options):  # pylint: disable=too-many-statements
         site_id = options.get('site_id')
         site_domain = options.get('site_domain')
         site_name = options.get('site_name')
         partner_code = options.get('partner_code')
         partner_name = options.get('partner_name')
         lms_url_root = options.get('lms_url_root')
-        client_id = options.get('client_id')
-        client_secret = options.get('client_secret')
+        lms_public_url_root = options.get('lms_public_url_root')
+        sso_client_id = options.get('sso_client_id')
+        sso_client_secret = options.get('sso_client_secret')
+        backend_service_client_id = options.get('backend_service_client_id')
+        backend_service_client_secret = options.get('backend_service_client_secret')
         segment_key = options.get('segment_key')
         from_email = options.get('from_email')
-        enable_enrollment_codes = True if options.get('enable_enrollment_codes') else False
+        enable_enrollment_codes = bool(options.get('enable_enrollment_codes'))
         payment_support_email = options.get('payment_support_email', '')
         payment_support_url = options.get('payment_support_url', '')
         base_cookie_domain = options.get('base_cookie_domain', '')
         discovery_api_url = options.get('discovery_api_url')
-        # TODO: journals dependency
-        journals_api_url = options.get('journals_api_url')
 
         try:
             site = Site.objects.get(id=site_id)
@@ -178,6 +186,29 @@ class Command(BaseCommand):
         partner.default_site = site
         partner.save()
 
+        oauth_settings = {
+            'SOCIAL_AUTH_EDX_OAUTH2_URL_ROOT': lms_url_root,
+            'SOCIAL_AUTH_EDX_OAUTH2_LOGOUT_URL': '{lms_url_root}/logout'.format(lms_url_root=lms_url_root),
+            'SOCIAL_AUTH_EDX_OAUTH2_ISSUERS': [lms_url_root],
+        }
+
+        if lms_public_url_root:
+            oauth_settings.update({
+                'SOCIAL_AUTH_EDX_OAUTH2_PUBLIC_URL_ROOT': lms_public_url_root,
+            })
+
+        if sso_client_id and sso_client_secret:
+            oauth_settings.update({
+                'SOCIAL_AUTH_EDX_OAUTH2_KEY': sso_client_id,
+                'SOCIAL_AUTH_EDX_OAUTH2_SECRET': sso_client_secret
+            })
+
+        if backend_service_client_id and backend_service_client_secret:
+            oauth_settings.update({
+                'BACKEND_SERVICE_EDX_OAUTH2_KEY': backend_service_client_id,
+                'BACKEND_SERVICE_EDX_OAUTH2_SECRET': backend_service_client_secret,
+            })
+
         site_configuration_defaults = {
             'partner': partner,
             'lms_url_root': lms_url_root,
@@ -187,16 +218,9 @@ class Command(BaseCommand):
             'from_email': from_email,
             'enable_enrollment_codes': enable_enrollment_codes,
             'send_refund_notifications': options['send_refund_notifications'],
-            'oauth_settings': {
-                'SOCIAL_AUTH_EDX_OIDC_URL_ROOT': '{lms_url_root}/oauth2'.format(lms_url_root=lms_url_root),
-                'SOCIAL_AUTH_EDX_OIDC_KEY': client_id,
-                'SOCIAL_AUTH_EDX_OIDC_SECRET': client_secret,
-                'SOCIAL_AUTH_EDX_OIDC_ID_TOKEN_DECRYPTION_KEY': client_secret,
-                'SOCIAL_AUTH_EDX_OIDC_ISSUERS': [lms_url_root]
-            },
+            'oauth_settings': oauth_settings,
             'base_cookie_domain': base_cookie_domain,
             'discovery_api_url': discovery_api_url,
-            'journals_api_url': journals_api_url,  # TODO: journals dependency
         }
         if payment_support_email:
             site_configuration_defaults['payment_support_email'] = payment_support_email

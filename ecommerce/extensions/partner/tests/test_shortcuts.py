@@ -1,3 +1,5 @@
+
+
 from mock import Mock
 
 from ecommerce.extensions.partner.shortcuts import get_partner_for_site

@@ -1,5 +1,4 @@
 # coding=utf-8
-
 import mock
 from django.conf import settings
 from django.test import override_settings
@@ -56,7 +55,7 @@ class RefundTestMixin(DiscoveryTestMixin):
                 price=100,
                 partner=self.partner,
                 UUID='111',
-                name='Foo',
+                title='Foo',
                 id_verification_required=id_verification_required
             )
             basket.add_product(course_entitlement)

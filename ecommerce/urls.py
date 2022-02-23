@@ -1,6 +1,8 @@
+
+
 import os
 
-from auth_backends.urls import auth_urlpatterns
+from auth_backends.urls import oauth2_urlpatterns
 from django.conf import settings
 from django.conf.urls import include, url
 from django.conf.urls.static import static
@@ -19,7 +21,7 @@ from ecommerce.extensions.payment.views.apple_pay import ApplePayMerchantDomainA
 from ecommerce.extensions.urls import urlpatterns as extensions_patterns
 
 
-def handler403(_):
+def handler403(_, exception):  # pylint: disable=unused-argument
     """Redirect unauthorized users to the LMS student dashboard.
 
     Removing URLs isn't the most elegant way to hide Oscar's front-end from
@@ -43,7 +45,7 @@ admin.site.site_title = admin.site.site_header
 
 # NOTE 1: Add our logout override first to ensure it is registered by Django as the actual logout view.
 # NOTE 2: These same patterns are used for rest_framework's browseable API authentication links.
-AUTH_URLS = [url(r'^logout/$', LogoutView.as_view(), name='logout'), ] + auth_urlpatterns
+AUTH_URLS = [url(r'^logout/$', LogoutView.as_view(), name='logout'), ] + oauth2_urlpatterns
 
 WELL_KNOWN_URLS = [
     url(r'^.well-known/apple-developer-merchantid-domain-association.txt$',
@@ -51,20 +53,21 @@ WELL_KNOWN_URLS = [
 ]
 
 urlpatterns = AUTH_URLS + WELL_KNOWN_URLS + [
-    url(r'^admin/', include(admin.site.urls)),
+    url(r'^admin/', admin.site.urls),
     url(r'^auto_auth/$', core_views.AutoAuth.as_view(), name='auto_auth'),
-    url(r'^api-auth/', include(AUTH_URLS, namespace='rest_framework')),
+    url(r'^api-auth/', include((AUTH_URLS, 'rest_framework'))),
     url(r'^api-docs/', get_swagger_view(title='Ecommerce API'), name='api_docs'),
-    url(r'^courses/', include('ecommerce.courses.urls', namespace='courses')),
-    url(r'^credit/', include('ecommerce.credit.urls', namespace='credit')),
-    url(r'^coupons/', include('ecommerce.coupons.urls', namespace='coupons')),
+    url(r'^bff/', include(('ecommerce.bff.urls', 'bff'))),
+    url(r'^courses/', include(('ecommerce.courses.urls', 'courses'))),
+    url(r'^credit/', include(('ecommerce.credit.urls', 'credit'))),
+    url(r'^coupons/', include(('ecommerce.coupons.urls', 'coupons'))),
+    url(r'^enterprise/', include(('ecommerce.enterprise.urls', 'enterprise'))),
     url(r'^health/$', core_views.health, name='health'),
-    url(r'^i18n/', include('django.conf.urls.i18n')),
-    url(r'^jsi18n/$', JavaScriptCatalog.as_view(packages=['courses']), name='javascript-catalog'),
-    url(r'^management/', include('ecommerce.management.urls', namespace='management')),
-    url(r'^programs/', include('ecommerce.programs.urls', namespace='programs')),
-    url(r'^enterprise/', include('ecommerce.enterprise.urls', namespace='enterprise')),
-    url(r'^journals/', include('ecommerce.journals.urls', namespace='journals')),  # TODO: journals dependency
+    url(r'^i18n/', include(('django.conf.urls.i18n'))),
+    url(r'^jsi18n/$', JavaScriptCatalog.as_view(), name='javascript-catalog'),
+    url(r'^management/', include(('ecommerce.management.urls', 'management'))),
+    url(r'^offers/', include(('ecommerce.extensions.offer.urls', 'offers'))),
+    url(r'^programs/', include(('ecommerce.programs.urls', 'programs'))),
 ]
 
 # Install Oscar extension URLs
@@ -73,6 +76,11 @@ urlpatterns += extensions_patterns
 robots = TemplateView.as_view(template_name='robots.txt', content_type='text/plain')
 urlpatterns += [
     url(r'^robots\.txt$', robots, name='robots')
+]
+
+# edx-drf-extensions csrf app
+urlpatterns += [
+    url(r'', include('csrf.urls')),
 ]
 
 if settings.DEBUG and settings.MEDIA_ROOT:  # pragma: no cover

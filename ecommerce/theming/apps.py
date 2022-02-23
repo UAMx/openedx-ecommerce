@@ -1,6 +1,8 @@
 """
 Module for code that should run during application startup
 """
+
+
 from django.apps import AppConfig
 
 from ecommerce.theming.core import enable_theming

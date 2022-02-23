@@ -1,3 +1,5 @@
+
+
 import mock
 from django.db import transaction
 from django.test import override_settings
@@ -11,8 +13,9 @@ from ecommerce.extensions.payment.constants import CARD_TYPES
 from ecommerce.extensions.payment.models import PaymentProcessorResponse
 from ecommerce.extensions.payment.processors.cybersource import Cybersource
 from ecommerce.extensions.payment.processors.paypal import Paypal
-from ecommerce.extensions.test.factories import UserFactory, create_basket, prepare_voucher
+from ecommerce.extensions.test.factories import create_basket, prepare_voucher
 from ecommerce.management.utils import FulfillFrozenBaskets, refund_basket_transactions
+from ecommerce.tests.factories import UserFactory
 from ecommerce.tests.testcases import TestCase
 
 Free = get_class('shipping.methods', 'Free')
@@ -118,7 +121,7 @@ class FulfillFrozenBasketsTests(TestCase):
         total = basket.total_incl_tax_excl_discounts
         Source.objects.get(
             source_type__name=Paypal.NAME, currency=order.currency, amount_allocated=total, amount_debited=total,
-            label='PayPal Account', card_type=None)
+            label='Paypal Account', card_type=None)
         PaymentEvent.objects.get(event_type__name=PaymentEventTypeName.PAID, amount=total,
                                  processor_name=Paypal.NAME)
 

@@ -1,4 +1,4 @@
-from __future__ import unicode_literals
+
 
 import uuid
 
@@ -8,20 +8,37 @@ from django.conf import settings
 from django.http.response import HttpResponse
 from edx_django_utils.cache import TieredCache
 from mock import patch
-from oscar.test.factories import VoucherFactory
+from oscar.core.loading import get_class
+from oscar.test.factories import BasketFactory, VoucherFactory
 
+from ecommerce.core.constants import SYSTEM_ENTERPRISE_ADMIN_ROLE, SYSTEM_ENTERPRISE_LEARNER_ROLE
+from ecommerce.courses.tests.factories import CourseFactory
+from ecommerce.enterprise.api import get_enterprise_id_for_user
 from ecommerce.enterprise.tests.mixins import EnterpriseServiceMockMixin
 from ecommerce.enterprise.utils import (
+    CUSTOMER_CATALOGS_DEFAULT_RESPONSE,
     enterprise_customer_user_needs_consent,
     get_enterprise_catalog,
     get_enterprise_customer,
+    get_enterprise_customer_catalogs,
+    get_enterprise_customer_from_enterprise_offer,
     get_enterprise_customer_uuid,
     get_enterprise_customers,
+    get_enterprise_id_for_current_request_user_from_jwt,
     get_or_create_enterprise_customer_user,
-    set_enterprise_customer_cookie
+    set_enterprise_customer_cookie,
+    update_paginated_response
 )
-from ecommerce.extensions.test.factories import prepare_voucher
+from ecommerce.extensions.partner.strategy import DefaultStrategy
+from ecommerce.extensions.test.factories import (
+    EnterpriseOfferFactory,
+    EnterprisePercentageDiscountBenefitFactory,
+    prepare_voucher
+)
+from ecommerce.tests.factories import PartnerFactory
 from ecommerce.tests.testcases import TestCase
+
+Applicator = get_class('offer.applicator', 'Applicator')
 
 TEST_ENTERPRISE_CUSTOMER_UUID = 'cf246b88-d5f6-4908-a522-fc307e0b0c59'
 
@@ -41,7 +58,7 @@ class EnterpriseUtilsTests(EnterpriseServiceMockMixin, TestCase):
         """
         self.mock_access_token_response()
         self.mock_enterprise_customer_list_api_get()
-        response = get_enterprise_customers(self.site)
+        response = get_enterprise_customers(self.request)
         self.assertEqual(response[0]['name'], "Enterprise Customer 1")
         self.assertEqual(response[1]['name'], "Enterprise Customer 2")
 
@@ -190,3 +207,166 @@ class EnterpriseUtilsTests(EnterpriseServiceMockMixin, TestCase):
 
         cached_response = get_enterprise_catalog(self.site, enterprise_catalog_uuid, 50, 1)
         self.assertEqual(response, cached_response)
+
+    @patch('ecommerce.enterprise.utils.get_decoded_jwt')
+    def test_get_enterprise_id_for_current_request_user_from_jwt_request_has_no_jwt(self, mock_decode_jwt):
+        """
+        Verify get_enterprise_id_for_current_request_user_from_jwt returns None if
+        decoded_jwt is None
+        """
+        mock_decode_jwt.return_value = None
+        assert get_enterprise_id_for_current_request_user_from_jwt() is None
+
+    @patch('ecommerce.enterprise.utils.get_decoded_jwt')
+    def test_get_enterprise_id_for_current_request_user_from_jwt_request_has_jwt(self, mock_decode_jwt):
+        """
+        Verify get_enterprise_id_for_current_request_user_from_jwt returns jwt context
+        for user if request has jwt and user has proper role
+        """
+        mock_decode_jwt.return_value = {
+            'roles': ['{}:some-uuid'.format(SYSTEM_ENTERPRISE_LEARNER_ROLE)]
+        }
+        assert get_enterprise_id_for_current_request_user_from_jwt() == 'some-uuid'
+
+    @patch('ecommerce.enterprise.utils.get_decoded_jwt')
+    def test_get_enterprise_id_for_current_request_user_from_jwt_request_has_jwt_no_context(self, mock_decode_jwt):
+        """
+        Verify get_enterprise_id_for_current_request_user_from_jwt returns None if jwt
+        context is missing
+        """
+        mock_decode_jwt.return_value = {
+            'roles': ['{}'.format(SYSTEM_ENTERPRISE_LEARNER_ROLE)]
+        }
+        assert get_enterprise_id_for_current_request_user_from_jwt() is None
+
+    @patch('ecommerce.enterprise.utils.get_decoded_jwt')
+    def test_get_enterprise_id_for_current_request_user_from_jwt_request_has_jwt_non_learner(self, mock_decode_jwt):
+        """
+        Verify get_enterprise_id_for_current_request_user_from_jwt returns None if
+        user role is incorrect
+        """
+
+        mock_decode_jwt.return_value = {
+            'roles': ['{}:some-uuid'.format(SYSTEM_ENTERPRISE_ADMIN_ROLE)]
+        }
+        assert get_enterprise_id_for_current_request_user_from_jwt() is None
+
+    @patch('ecommerce.enterprise.api.get_enterprise_id_for_current_request_user_from_jwt')
+    def test_get_enterprise_id_for_user_enterprise_in_jwt(self, mock_get_jwt_uuid):
+        """
+        Verify get_enterprise_id_for_user returns ent id if uuid in jwt context
+        """
+        mock_get_jwt_uuid.return_value = 'my-uuid'
+        assert get_enterprise_id_for_user('some-site', self.learner) == 'my-uuid'
+
+    def test_get_enterprise_customer_catalogs(self):
+        """
+        Verify that "get_enterprise_customer_catalogs" works as expected with and without caching.
+        """
+        enterprise_customer_uuid = str(uuid.uuid4())
+        base_url = self.LEGACY_ENTERPRISE_CATALOG_URL
+
+        self.mock_access_token_response()
+        self.mock_enterprise_catalog_api(enterprise_customer_uuid)
+
+        # verify the caching
+        with patch.object(TieredCache, 'set_all_tiers', wraps=TieredCache.set_all_tiers) as mocked_set_all_tiers:
+            mocked_set_all_tiers.assert_not_called()
+
+            response = get_enterprise_customer_catalogs(self.site, base_url, enterprise_customer_uuid, 1)
+            self.assertEqual(mocked_set_all_tiers.call_count, 2)
+
+            cached_response = get_enterprise_customer_catalogs(self.site, base_url, enterprise_customer_uuid, 1)
+            self.assertEqual(response, cached_response)
+            self.assertEqual(mocked_set_all_tiers.call_count, 2)
+
+    def test_get_enterprise_customer_catalogs_with_exception(self):
+        """
+        Verify that "get_enterprise_customer_catalogs" return default response on exception.
+        """
+        enterprise_customer_uuid = str(uuid.uuid4())
+        base_url = self.LEGACY_ENTERPRISE_CATALOG_URL
+
+        self.mock_access_token_response()
+        self.mock_enterprise_catalog_api(enterprise_customer_uuid, raise_exception=True)
+
+        with patch('ecommerce.enterprise.utils.logging.exception') as mock_logger:
+            response = get_enterprise_customer_catalogs(self.site, base_url, enterprise_customer_uuid, 1)
+            self.assertEqual(response, CUSTOMER_CATALOGS_DEFAULT_RESPONSE)
+            self.assertTrue(mock_logger.called)
+
+    @ddt.data(
+        {
+            'next_url': None,
+            'expected_next': None,
+            'previous': None,
+            'expected_previous': None,
+        },
+        {
+            'next_url': None,
+            'expected_next': None,
+            'previous': 'http://lms.server/enterprise/api/v1/enterprise_catalogs/?enterprise=6ae013d4&page=3',
+            'expected_previous': 'http://ecom.server/api/v2/enterprise/customer_catalogs?enterprise=6ae013d4&page=3',
+        },
+        {
+            'next_url': 'http://lms.server/enterprise/api/v1/enterprise_catalogs/?enterprise=6ae013d4&page=3',
+            'expected_next': 'http://ecom.server/api/v2/enterprise/customer_catalogs?enterprise=6ae013d4&page=3',
+            'previous': None,
+            'expected_previous': None,
+        },
+        {
+            'next_url': 'http://lms.server/enterprise/api/v1/enterprise_catalogs/?enterprise=6ae013d4&page=3',
+            'expected_next': 'http://ecom.server/api/v2/enterprise/customer_catalogs?enterprise=6ae013d4&page=3',
+            'previous': 'http://lms.server/enterprise/api/v1/enterprise_catalogs/?enterprise=6ae013d4&page=1',
+            'expected_previous': 'http://ecom.server/api/v2/enterprise/customer_catalogs?enterprise=6ae013d4&page=1',
+        },
+    )
+    @ddt.unpack
+    def test_update_paginated_response(self, next_url, expected_next, previous, expected_previous):
+        """
+        Verify that "update_paginated_response" util works as expected.
+        """
+        ecom_endpoint_url = 'http://ecom.server/api/v2/enterprise/customer_catalogs'
+        original_response = dict(CUSTOMER_CATALOGS_DEFAULT_RESPONSE, next=next_url, previous=previous)
+
+        updated_response = update_paginated_response(ecom_endpoint_url, original_response)
+
+        expected_response = dict(
+            original_response,
+            next=expected_next,
+            previous=expected_previous
+        )
+        self.assertEqual(expected_response, updated_response)
+
+    @ddt.data(0, 100)
+    def test_get_enterprise_customer_from_enterprise_offer(self, discount_value):
+        """
+        Verify that "get_enterprise_customer_from_enterprise_offer" returns `None` if expected conditions are not met.
+        """
+        course = CourseFactory(name='EnterpriseConsentErrorTest', partner=PartnerFactory())
+        product = course.create_or_update_seat('verified', False, 50)
+
+        benefit = EnterprisePercentageDiscountBenefitFactory(value=discount_value)
+        offer = EnterpriseOfferFactory(benefit=benefit)
+        # set wrong priority to invalidate the condition in util
+        offer.priority = 111
+
+        self.mock_enterprise_learner_api(
+            learner_id=self.learner.id,
+            enterprise_customer_uuid=str(offer.condition.enterprise_customer_uuid),
+            course_run_id=course.id,
+        )
+
+        self.mock_catalog_contains_course_runs(
+            [course.id],
+            str(offer.condition.enterprise_customer_uuid),
+            enterprise_customer_catalog_uuid=str(offer.condition.enterprise_customer_catalog_uuid),
+            contains_content=True,
+        )
+
+        basket = BasketFactory(site=self.site, owner=self.create_user())
+        basket.add_product(product)
+        basket.strategy = DefaultStrategy()
+        Applicator().apply_offers(basket, [offer])
+
+        self.assertIsNone(get_enterprise_customer_from_enterprise_offer(basket))

@@ -1,3 +1,5 @@
+
+
 from django.conf.urls import include, url
 
 from ecommerce.programs import views
@@ -9,5 +11,5 @@ OFFER_URLS = [
 ]
 urlpatterns = [
 
-    url(r'^offers/', include(OFFER_URLS, namespace='offers')),
+    url(r'^offers/', include((OFFER_URLS, 'offers'))),
 ]

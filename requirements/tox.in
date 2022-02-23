@@ -1,0 +1,4 @@
+-c pins.txt
+
+tox
+tox-battery

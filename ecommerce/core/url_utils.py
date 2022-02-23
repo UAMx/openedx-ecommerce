@@ -1,5 +1,9 @@
+
+
 import warnings
 
+from django.http import HttpResponseRedirect
+from django.urls import reverse
 from threadlocals.threadlocals import get_current_request
 
 from ecommerce.core.exceptions import MissingRequestError
@@ -105,3 +109,11 @@ def get_lms_url(path=''):
 def get_oauth2_provider_url():
     site_configuration = _get_site_configuration()
     return site_configuration.oauth2_provider_url
+
+
+def absolute_url(request, reverse_string):
+    return request.build_absolute_uri(reverse(reverse_string))
+
+
+def absolute_redirect(request, reverse_string):
+    return HttpResponseRedirect(absolute_url(request, reverse_string))

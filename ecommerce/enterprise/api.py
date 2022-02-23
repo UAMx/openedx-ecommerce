@@ -1,70 +1,21 @@
 """
 Methods for fetching enterprise API data.
 """
+
+
 import logging
-from urllib import urlencode
+from urllib.parse import urlencode
 
 from django.conf import settings
 from edx_django_utils.cache import TieredCache
-from requests.exceptions import ConnectionError, Timeout
+from requests.exceptions import ConnectionError as ReqConnectionError
+from requests.exceptions import Timeout
 from slumber.exceptions import SlumberHttpBaseException
 
 from ecommerce.core.utils import get_cache_key
+from ecommerce.enterprise.utils import get_enterprise_id_for_current_request_user_from_jwt
 
 logger = logging.getLogger(__name__)
-
-
-def fetch_enterprise_learner_entitlements(site, learner_id):
-    """
-    Fetch enterprise learner entitlements along-with data sharing consent requirement.
-
-    Arguments:
-        site (Site): site instance.
-        learner_id (int): Primary key identifier for the enterprise learner.
-
-    Example:
-        >>> from django.contrib.sites.shortcuts import get_current_site
-        >>> site  = get_current_site()
-        >>> fetch_enterprise_learner_entitlements(site, 1)
-        [
-            {
-                "requires_consent": False,
-                "entitlement_id": 1
-            },
-        ]
-
-    Returns:
-         (list): Containing dicts of the following structure
-            {
-                "requires_consent": True,
-                "entitlement_id": 1
-            }
-
-    Raises:
-        ConnectionError: requests exception "ConnectionError", raised if if ecommerce is unable to connect
-            to enterprise api server.
-        SlumberBaseException: base slumber exception "SlumberBaseException", raised if API response contains
-            http error status like 4xx, 5xx etc.
-        Timeout: requests exception "Timeout", raised if enterprise API is taking too long for returning
-            a response. This exception is raised for both connection timeout and read timeout.
-    """
-    resource_url = 'enterprise-learner/{learner_id}/entitlements'.format(learner_id=learner_id)
-    cache_key = get_cache_key(
-        site_domain=site.domain,
-        partner_code=site.siteconfiguration.partner.short_code,
-        resource=resource_url,
-        learner_id=learner_id
-    )
-
-    entitlements_cached_response = TieredCache.get_cached_response(cache_key)
-    if entitlements_cached_response.is_found:
-        return entitlements_cached_response.value
-
-    api = site.siteconfiguration.enterprise_api_client
-    entitlements = getattr(api, resource_url).get()
-
-    TieredCache.set_all_tiers(cache_key, entitlements, settings.ENTERPRISE_API_CACHE_TIMEOUT)
-    return entitlements
 
 
 def fetch_enterprise_learner_data(site, user):
@@ -101,13 +52,7 @@ def fetch_enterprise_learner_data(site, user):
                             "branding_configuration": {
                                 "enterprise_customer": "cf246b88-d5f6-4908-a522-fc307e0b0c59",
                                 "logo": "https://open.edx.org/sites/all/themes/edx_open/logo.png"
-                            },
-                            "enterprise_customer_entitlements": [
-                                {
-                                    "enterprise_customer": "cf246b88-d5f6-4908-a522-fc307e0b0c59",
-                                    "entitlement_id": 69
-                                }
-                            ]
+                            }
                         },
                         "user_id": 5,
                         "user": {
@@ -173,10 +118,13 @@ def catalog_contains_course_runs(site, course_run_ids, enterprise_customer_uuid,
     Determine if course runs are associated with the EnterpriseCustomer.
     """
     query_params = {'course_run_ids': course_run_ids}
+    api = site.siteconfiguration.enterprise_catalog_api_client
+
+    # Determine API resource to use
     api_resource_name = 'enterprise-customer'
     api_resource_id = enterprise_customer_uuid
     if enterprise_customer_catalog_uuid:
-        api_resource_name = 'enterprise_catalogs'
+        api_resource_name = 'enterprise-catalogs'
         api_resource_id = enterprise_customer_catalog_uuid
 
     cache_key = get_cache_key(
@@ -192,20 +140,27 @@ def catalog_contains_course_runs(site, course_run_ids, enterprise_customer_uuid,
     if contains_content_cached_response.is_found:
         return contains_content_cached_response.value
 
-    api = site.siteconfiguration.enterprise_api_client
     endpoint = getattr(api, api_resource_name)(api_resource_id)
-    try:
-        contains_content = endpoint.contains_content_items.get(**query_params)['contains_content_items']
+    contains_content = endpoint.contains_content_items.get(**query_params)['contains_content_items']
+    TieredCache.set_all_tiers(cache_key, contains_content, settings.ENTERPRISE_API_CACHE_TIMEOUT)
 
-        TieredCache.set_all_tiers(cache_key, contains_content, settings.ENTERPRISE_API_CACHE_TIMEOUT)
-    except (ConnectionError, KeyError, SlumberHttpBaseException, Timeout):
-        logger.exception(
-            'Failed to check if course_runs [%s] exist in '
-            'EnterpriseCustomerCatalog [%s]'
-            'for EnterpriseCustomer [%s].',
-            course_run_ids,
-            enterprise_customer_catalog_uuid,
-            enterprise_customer_uuid,
-        )
-        contains_content = False
     return contains_content
+
+
+def get_enterprise_id_for_user(site, user):
+    enterprise_from_jwt = get_enterprise_id_for_current_request_user_from_jwt()
+    if enterprise_from_jwt:
+        return enterprise_from_jwt
+
+    try:
+        enterprise_learner_response = fetch_enterprise_learner_data(site, user)
+    except (AttributeError, ReqConnectionError, KeyError, SlumberHttpBaseException, Timeout) as exc:
+        logger.info('Unable to retrieve enterprise learner data for User: %s, Exception: %s', user, exc)
+        return None
+
+    try:
+        return enterprise_learner_response['results'][0]['enterprise_customer']['uuid']
+    except IndexError:
+        pass
+
+    return None

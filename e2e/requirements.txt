@@ -1,9 +1,3 @@
-# Packages required to run e2e tests
-bok-choy==0.7.0
-edx-rest-api-client==1.7.1
-pytest==3.1.3
-pytest-random-order==0.5.4
-pytest-selenium==1.11.0
-pytest-timeout==1.2.0
-python-dotenv==0.6.4
-selenium==3.4.3
+# Bridge the gap between the old and new dependency locations
+
+-r ../requirements/e2e.txt

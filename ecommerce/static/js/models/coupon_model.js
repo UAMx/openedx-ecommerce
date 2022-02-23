@@ -51,7 +51,8 @@ define([
                 quantity: 1,
                 seats: [],
                 stock_record_ids: [],
-                total_value: 0
+                total_value: 0,
+                sales_force_id: null
             },
 
             catalogTypes: CATALOG_TYPES,
@@ -81,6 +82,9 @@ define([
                         }
                     }
                     return undefined;
+                },
+                sales_force_id: {
+                    required: false
                 },
                 end_date: function(val) {
                     var startDate,
@@ -183,15 +187,6 @@ define([
                     }
                     return undefined;
                 },
-                enterprise_customer: function(val) {
-                    if ((_.isEmpty(val) || _.isEmpty(val.id)) &&
-                        !_.isEmpty(this.get('enterprise_customer_catalog'))) {
-                        return gettext('Enterprise Customer must be set if Enterprise Customer Catalog is set');
-                    }
-
-                    return undefined;
-                },
-                enterprise_customer_catalog: {required: false},
                 program_uuid: {
                     msg: gettext('A valid Program UUID is required.'),
                     required: function() {

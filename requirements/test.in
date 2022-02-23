@@ -1,20 +1,28 @@
--r base.in
+-c pins.txt
+-r base.txt
+-r e2e.txt                  # required for quality
+-r tox.txt
 
-coverage==4.3.4
-ddt==1.1.1
-diff-cover==0.9.6
-django-nose==1.4.4
-django-webtest==1.9.2
-factory-boy==2.8.1
-freezegun==0.3.7
-httpretty==0.8.14
-isort==4.2.5
-lxml==3.8.0
-mock==1.3.0
-mock-django==0.6.9
-nose-ignore-docstring==0.2
-pep8==1.6.2
-pylint==1.6.4
-responses==0.5.1
-selenium==3.4.3
-testfixtures==4.5.0
+bok_choy
+coverage
+ddt
+diff-cover
+django-webtest
+edx-i18n-tools              # required for quality
+factory-boy
+freezegun
+httpretty
+isort
+lxml
+mock
+mock-django
+pycodestyle
+pylint
+pytest
+pytest-cov
+pytest-django
+pytest-django-ordering
+python-memcached==1.58      # required by collectstatic in devstack
+responses
+selenium
+testfixtures                # Provides a LogCapture utility used by several tests

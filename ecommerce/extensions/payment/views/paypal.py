@@ -1,9 +1,9 @@
 """ Views for interacting with the payment processor. """
-from __future__ import unicode_literals
+
 
 import logging
 import os
-from cStringIO import StringIO
+from io import StringIO
 
 from django.core.exceptions import MultipleObjectsReturned
 from django.core.management import call_command
@@ -66,6 +66,7 @@ class PaypalPaymentExecutionView(EdxOrderPlacementMixin, View):
                 transaction_id=payment_id
             ).basket
             basket.strategy = strategy.Default()
+
             Applicator().apply(basket, basket.owner, self.request)
 
             basket_add_organization_attribute(basket, self.request.GET)
@@ -91,7 +92,8 @@ class PaypalPaymentExecutionView(EdxOrderPlacementMixin, View):
 
         receipt_url = get_receipt_page_url(
             order_number=basket.order_number,
-            site_configuration=basket.site.siteconfiguration
+            site_configuration=basket.site.siteconfiguration,
+            disable_back_button=True,
         )
 
         try:
@@ -104,37 +106,19 @@ class PaypalPaymentExecutionView(EdxOrderPlacementMixin, View):
             logger.exception('Attempts to handle payment for basket [%d] failed.', basket.id)
             return redirect(receipt_url)
 
-        self.call_handle_order_placement(basket, request)
-
-        return redirect(receipt_url)
-
-    def call_handle_order_placement(self, basket, request):
         try:
-            shipping_method = NoShippingRequired()
-            shipping_charge = shipping_method.calculate(basket)
-            order_total = OrderTotalCalculator().calculate(basket, shipping_charge)
+            order = self.create_order(request, basket)
+        except Exception:  # pylint: disable=broad-except
+            # any errors here will be logged in the create_order method. If we wanted any
+            # Paypal specific logging for this error, we would do that here.
+            return redirect(receipt_url)
 
-            user = basket.owner
-            # Given a basket, order number generation is idempotent. Although we've already
-            # generated this order number once before, it's faster to generate it again
-            # than to retrieve an invoice number from PayPal.
-            order_number = basket.order_number
-
-            order = self.handle_order_placement(
-                order_number=order_number,
-                user=user,
-                basket=basket,
-                shipping_address=None,
-                shipping_method=shipping_method,
-                shipping_charge=shipping_charge,
-                billing_address=None,
-                order_total=order_total,
-                request=request
-            )
+        try:
             self.handle_post_order(order)
-
         except Exception:  # pylint: disable=broad-except
             self.log_order_placement_exception(basket.order_number, basket.id)
+
+        return redirect(receipt_url)
 
 
 class PaypalProfileAdminView(View):

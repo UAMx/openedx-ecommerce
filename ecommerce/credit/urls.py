@@ -1,3 +1,5 @@
+
+
 from django.conf.urls import url
 
 from ecommerce.core.constants import COURSE_ID_PATTERN

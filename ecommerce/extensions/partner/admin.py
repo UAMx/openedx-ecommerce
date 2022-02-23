@@ -1,8 +1,10 @@
+
+
 from django.utils.translation import ugettext_lazy as _
 from oscar.apps.partner.admin import *  # noqa pylint: disable=wildcard-import,unused-wildcard-import
 from oscar.core.loading import get_class
 
-Catalog = get_class('ecommerce.extensions.catalogue.models', 'Catalog')
+Catalog = get_class('catalogue.models', 'Catalog')
 
 admin.site.unregister((StockRecord, Partner,))
 
@@ -20,12 +22,12 @@ class CatalogAdmin(admin.ModelAdmin):
     search_fields = ('name', 'partner__name')
     list_filter = ('partner',)
 
-    def render_change_form(self, request, context, *args, **kwargs):
+    def render_change_form(self, request, context, *args, **kwargs):  # pylint: disable=arguments-differ
         if 'partner' in context['adminform'].form.fields:
             context['adminform'].form.fields['partner'].help_text = _(
                 u"Click 'Save and Continue Editing' to add stock records"
             )
-        return super(CatalogAdmin, self).render_change_form(request, context, args, kwargs)
+        return super(CatalogAdmin, self).render_change_form(request, context, *args, **kwargs)
 
     def get_readonly_fields(self, request, obj=None):
         readonly_fields = list(self.readonly_fields)
@@ -49,6 +51,7 @@ class CatalogAdmin(admin.ModelAdmin):
         object_id = request.META['PATH_INFO'].strip('/').split('/')[-2]
         if object_id and object_id.isdigit():
             return model.objects.get(pk=object_id)
+        return None
 
 
 @admin.register(Partner)

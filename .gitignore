@@ -65,6 +65,7 @@ coverage.xml
 diff_*.html
 *.report
 report
+reports
 edx_ecommerce.log
 venv
 e2e.*.log
@@ -89,6 +90,7 @@ private.py
 docs/_build
 *.backup
 *.log
+*.bak
 
 # Visual Studio Code
 .vscode
@@ -96,3 +98,9 @@ docs/_build
 # Certificates
 *.cer
 *.pem
+
+# emacs
+*~
+
+### Unknown artifacts
+*.bak

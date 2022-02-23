@@ -1,4 +1,4 @@
-from __future__ import unicode_literals
+
 
 from decimal import Decimal
 
@@ -8,7 +8,6 @@ import mock
 from django.conf import settings
 from oscar.apps.payment.exceptions import PaymentError
 from oscar.core.loading import get_class, get_model
-from oscar.test.factories import UserFactory
 from testfixtures import LogCapture
 
 from ecommerce.core.constants import SEAT_PRODUCT_CLASS_NAME
@@ -23,6 +22,7 @@ from ecommerce.extensions.refund.status import REFUND, REFUND_LINE
 from ecommerce.extensions.refund.tests.factories import RefundFactory, RefundLineFactory
 from ecommerce.extensions.refund.tests.mixins import RefundTestMixin
 from ecommerce.extensions.test.factories import create_basket, create_order
+from ecommerce.tests.factories import UserFactory
 from ecommerce.tests.testcases import TestCase
 
 PaymentEventType = get_model('order', 'PaymentEventType')
@@ -34,7 +34,7 @@ LOGGER_NAME = 'ecommerce.extensions.analytics.utils'
 REFUND_MODEL_LOGGER_NAME = 'ecommerce.extensions.refund.models'
 
 
-class StatusTestsMixin(object):
+class StatusTestsMixin:
     pipeline = None
 
     def _get_instance(self, **kwargs):
@@ -44,17 +44,17 @@ class StatusTestsMixin(object):
     def test_available_statuses(self):
         """ Verify available_statuses() returns a list of statuses corresponding to the pipeline. """
 
-        for status, allowed_transitions in self.pipeline.iteritems():
+        for status, allowed_transitions in self.pipeline.items():
             instance = self._get_instance(status=status)
             self.assertEqual(instance.available_statuses(), allowed_transitions)
 
     def test_set_status_invalid_status(self):
         """ Verify attempts to set the status to an invalid value raise an exception. """
 
-        for status, valid_statuses in self.pipeline.iteritems():
+        for status, valid_statuses in self.pipeline.items():
             instance = self._get_instance(status=status)
 
-            all_statuses = self.pipeline.keys()
+            all_statuses = list(self.pipeline.keys())
             invalid_statuses = set(all_statuses) - set(valid_statuses)
 
             for new_status in invalid_statuses:
@@ -65,7 +65,7 @@ class StatusTestsMixin(object):
     def test_set_status_valid_status(self):
         """ Verify status is updated when attempting to transition to a valid status. """
 
-        for status, valid_statuses in self.pipeline.iteritems():
+        for status, valid_statuses in self.pipeline.items():
             for new_status in valid_statuses:
                 instance = self._get_instance(status=status)
                 instance.set_status(new_status)
@@ -89,7 +89,7 @@ class RefundTests(RefundTestMixin, StatusTestsMixin, TestCase):
 
     def test_all_statuses(self):
         """ Refund.all_statuses should return all possible statuses for a refund. """
-        self.assertEqual(Refund.all_statuses(), self.pipeline.keys())
+        self.assertEqual(Refund.all_statuses(), list(self.pipeline.keys()))
 
     @ddt.data(False, True)
     def test_create_with_lines(self, multiple_lines):
@@ -99,18 +99,18 @@ class RefundTests(RefundTestMixin, StatusTestsMixin, TestCase):
         """
         order = self.create_order(user=UserFactory(), multiple_lines=multiple_lines)
 
-        with LogCapture(LOGGER_NAME) as l:
+        with LogCapture(LOGGER_NAME) as logger:
             refund = Refund.create_with_lines(order, list(order.lines.all()))
 
-            self.assert_refund_creation_logged(l, refund, order)
+            self.assert_refund_creation_logged(logger, refund, order)
 
         self.assert_refund_matches_order(refund, order)
 
-    def assert_refund_creation_logged(self, l, refund, order):
+    def assert_refund_creation_logged(self, logger, refund, order):
         """
         Asserts that refund creation is logged.
         """
-        l.check(
+        logger.check_present(
             (
                 LOGGER_NAME,
                 'INFO',
@@ -143,13 +143,11 @@ class RefundTests(RefundTestMixin, StatusTestsMixin, TestCase):
         line = order.lines.first()
         RefundLineFactory(order_line=line, status=refund_status)
 
-        with LogCapture(LOGGER_NAME) as l:
+        with LogCapture(LOGGER_NAME) as logger:
             refund = Refund.create_with_lines(order, [line])
             self.assertEqual(isinstance(refund, Refund), refund_created)
             if refund_created:
-                self.assert_refund_creation_logged(l, refund, order)
-            else:
-                l.check()
+                self.assert_refund_creation_logged(logger, refund, order)
 
     @httpretty.activate
     @mock.patch('ecommerce.extensions.fulfillment.modules.EnrollmentFulfillmentModule.revoke_line')
@@ -179,7 +177,7 @@ class RefundTests(RefundTestMixin, StatusTestsMixin, TestCase):
 
         # Verify that the refund has been successfully approved.
         self.assertEqual(refund.status, REFUND.COMPLETE)
-        self.assertEqual(set([line.status for line in refund.lines.all()]), {REFUND_LINE.COMPLETE})
+        self.assertEqual({line.status for line in refund.lines.all()}, {REFUND_LINE.COMPLETE})
 
         # Verify no notification is sent to the purchaser
         self.assertFalse(mock_notify.called)
@@ -231,11 +229,11 @@ class RefundTests(RefundTestMixin, StatusTestsMixin, TestCase):
         refund = self.create_refund()
         source = refund.order.sources.first()
 
-        with LogCapture(LOGGER_NAME) as l:
+        with LogCapture(LOGGER_NAME) as logger:
             with mock.patch.object(Refund, '_notify_purchaser', return_value=None) as mock_notify:
                 self.approve(refund)
 
-            l.check(
+            logger.check_present(
                 (
                     LOGGER_NAME,
                     'INFO',
@@ -339,10 +337,10 @@ class RefundTests(RefundTestMixin, StatusTestsMixin, TestCase):
 
         # Make RefundLine.deny() raise an exception
         with mock.patch('ecommerce.extensions.refund.models.RefundLine.deny', side_effect=Exception):
-            with LogCapture(REFUND_MODEL_LOGGER_NAME) as l:
+            with LogCapture(REFUND_MODEL_LOGGER_NAME) as logger:
                 self.assertFalse(refund.deny())
-                l.check((REFUND_MODEL_LOGGER_NAME, 'ERROR',
-                         'Failed to deny RefundLine [{}].'.format(refund.lines.first().id)))
+                msg = 'Failed to deny RefundLine [{}].'.format(refund.lines.first().id)
+                logger.check_present((REFUND_MODEL_LOGGER_NAME, 'ERROR', msg))
 
     @ddt.data(REFUND.REVOCATION_ERROR, REFUND.PAYMENT_REFUNDED, REFUND.PAYMENT_REFUND_ERROR, REFUND.COMPLETE)
     def test_deny_wrong_state(self, status):
@@ -377,11 +375,11 @@ class RefundTests(RefundTestMixin, StatusTestsMixin, TestCase):
 
         refund = Refund.create_with_lines(order, order.lines.all())
 
-        with LogCapture(REFUND_MODEL_LOGGER_NAME) as l:
+        with LogCapture(REFUND_MODEL_LOGGER_NAME) as logger:
             refund._notify_purchaser()  # pylint: disable=protected-access
 
         msg = 'Course refund notification scheduled for Refund [{}].'.format(refund.id)
-        l.check(
+        logger.check_present(
             (REFUND_MODEL_LOGGER_NAME, 'INFO', msg)
         )
 
@@ -410,11 +408,11 @@ class RefundTests(RefundTestMixin, StatusTestsMixin, TestCase):
 
         refund = Refund.create_with_lines(order, order.lines.all())
 
-        with LogCapture(REFUND_MODEL_LOGGER_NAME) as l:
+        with LogCapture(REFUND_MODEL_LOGGER_NAME) as logger:
             refund._notify_purchaser()  # pylint: disable=protected-access
 
         msg = 'Course refund notification scheduled for Refund [{}].'.format(refund.id)
-        l.check(
+        logger.check_present(
             (REFUND_MODEL_LOGGER_NAME, 'INFO', msg)
         )
 
@@ -431,12 +429,12 @@ class RefundTests(RefundTestMixin, StatusTestsMixin, TestCase):
         order = create_order(site=self.site)
         refund = self.create_refund(order=order)
 
-        with LogCapture(REFUND_MODEL_LOGGER_NAME) as l:
+        with LogCapture(REFUND_MODEL_LOGGER_NAME) as logger:
             refund._notify_purchaser()  # pylint: disable=protected-access
 
         msg = 'Refund notifications are disabled for Partner [{code}]. ' \
               'No notification will be sent for Refund [{id}]'.format(code=self.partner.short_code, id=refund.id)
-        l.check(
+        logger.check_present(
             (REFUND_MODEL_LOGGER_NAME, 'INFO', msg)
         )
         self.assertFalse(mock_task.called)
@@ -452,12 +450,12 @@ class RefundTests(RefundTestMixin, StatusTestsMixin, TestCase):
 
         refund = self.create_refund(order=order)
 
-        with LogCapture(REFUND_MODEL_LOGGER_NAME) as l:
+        with LogCapture(REFUND_MODEL_LOGGER_NAME) as logger:
             refund._notify_purchaser()  # pylint: disable=protected-access
 
         msg = ('No refund notification will be sent for Refund [{id}]. The notification supports product '
                'lines of type Course, not [{product_class}].').format(product_class=product_class, id=refund.id)
-        l.check(
+        logger.check_present(
             (REFUND_MODEL_LOGGER_NAME, 'WARNING', msg)
         )
         self.assertFalse(mock_task.called)

@@ -16,6 +16,7 @@ define([
         return CouponListView.extend({
             template: _.template(EnterpriseCouponListViewTemplate),
             linkTpl: _.template('<a href="/enterprise/coupons/<%= id %>/" class="coupon-title"><%= title %></a>'),
+            url: '/api/v2/enterprise/coupons/?format=datatables',
 
             getTableColumns: function() {
                 return [
@@ -28,23 +29,34 @@ define([
                     },
                     {
                         title: gettext('Created'),
-                        data: 'dateCreated'
+                        data: 'date_created',
+                        fnCreatedCell: function(nTd, sData, oData) {
+                            $(nTd).html(moment(oData.date_created).format('MMMM DD, YYYY, h:mm A'));
+                        }
                     },
                     {
                         title: gettext('Status'),
-                        data: 'codeStatus'
+                        data: 'code_status',
+                        orderable: false,
+                        searchable: false
                     },
                     {
                         title: gettext('Client'),
-                        data: 'client'
+                        data: 'client',
+                        orderable: false,
+                        searchable: false
                     },
                     {
                         title: gettext('Enterprise Customer'),
-                        data: 'enterpriseCustomer'
+                        data: 'enterprise_customer',
+                        orderable: false,
+                        searchable: false
                     },
                     {
                         title: gettext('Enterprise Customer Catalog'),
-                        data: 'enterpriseCustomerCatalog'
+                        data: 'enterprise_customer_catalog',
+                        orderable: false,
+                        searchable: false
                     },
                     {
                         title: gettext('Coupon Report'),
@@ -52,21 +64,10 @@ define([
                         fnCreatedCell: _.bind(function(nTd, sData, oData) {
                             $(nTd).html(this.downloadTpl(oData));
                         }, this),
-                        orderable: false
+                        orderable: false,
+                        searchable: false
                     }
                 ];
-            },
-
-            getRowData: function(coupon) {
-                return {
-                    client: coupon.get('client'),
-                    codeStatus: coupon.get('code_status'),
-                    enterpriseCustomer: coupon.get('enterprise_customer'),
-                    enterpriseCustomerCatalog: coupon.get('enterprise_customer_catalog'),
-                    id: coupon.get('id'),
-                    title: coupon.get('title'),
-                    dateCreated: moment(coupon.get('date_created')).format('MMMM DD, YYYY, h:mm A')
-                };
             }
         });
     }

@@ -1,9 +1,11 @@
+
+
 from decimal import Decimal
 
 import httpretty
 from django.urls import reverse
 from oscar.core.loading import get_class
-from oscar.test.factories import RangeFactory
+from oscar.test.factories import BasketFactory, RangeFactory
 
 from ecommerce.courses.models import Course
 from ecommerce.extensions.partner.strategy import DefaultStrategy
@@ -25,7 +27,7 @@ class ProgramOfferTests(LmsApiMockMixin, ProgramTestMixin, TestCase):
             partner=self.partner,
             benefit=factories.PercentageDiscountBenefitWithoutRangeFactory(value=100)
         )
-        basket = factories.BasketFactory(site=self.site, owner=self.create_user())
+        basket = BasketFactory(site=self.site, owner=self.create_user())
 
         program_uuid = offer.condition.program_uuid
         program = self.mock_program_detail_endpoint(program_uuid, self.site_configuration.discovery_api_url)
@@ -48,7 +50,7 @@ class ProgramOfferTests(LmsApiMockMixin, ProgramTestMixin, TestCase):
 
         # Apply the offers as Oscar will in a request
         basket.strategy = DefaultStrategy()
-        Applicator().apply(basket, basket.owner)
+        Applicator().apply(basket, basket.owner, bundle_id=program_uuid)
 
         # Our discount should be applied, and each line should have a price of 0
         lines = basket.all_lines()

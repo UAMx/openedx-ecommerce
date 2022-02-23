@@ -2,6 +2,8 @@
 Comprehensive Theming support for Django's collectstatic functionality.
 See https://docs.djangoproject.com/en/1.8/ref/contrib/staticfiles/
 """
+
+
 import os.path
 
 from django.conf import settings
@@ -90,5 +92,4 @@ class ThemeStorage(StaticFilesStorage):
             path = safe_join(themed_path, name)
             return os.path.exists(path)
         # in live mode check static asset in the static files dir defined by "STATIC_ROOT" setting
-        else:
-            return self.exists(os.path.join(theme, name))
+        return self.exists(os.path.join(theme, name))

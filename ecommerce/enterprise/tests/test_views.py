@@ -1,3 +1,5 @@
+
+
 import uuid
 
 import httpretty
@@ -106,6 +108,10 @@ class EnterpriseOfferUpdateViewTests(EnterpriseServiceMockMixin, ViewTestMixin, 
             'enterprise_customer_catalog_uuid': self.enterprise_offer.condition.enterprise_customer_catalog_uuid,
             'benefit_type': self.enterprise_offer.benefit.proxy().benefit_class_type,
             'benefit_value': self.enterprise_offer.benefit.value,
+            'contract_discount_type': 'Absolute',
+            'contract_discount_value': 200,
+            'prepaid_invoice_amount': 2000,
+            'usage_email_frequency': ConditionalOffer.DAILY
         }
         response = self.client.post(self.path, data, follow=False)
         self.assertRedirects(response, self.path)
@@ -122,23 +128,48 @@ class EnterpriseOfferCreateViewTests(EnterpriseServiceMockMixin, ViewTestMixin, 
         expected_ec_catalog_uuid = uuid.uuid4()
         self.mock_specific_enterprise_customer_api(expected_ec_uuid)
         expected_benefit_value = 10
+        expected_discount_value = 2000
+        expected_discount_type = 'Absolute'
+        expected_prepaid_invoice_amount = 12345
+        sales_force_id = 'salesforceid123'
         data = {
             'enterprise_customer_uuid': expected_ec_uuid,
             'enterprise_customer_catalog_uuid': expected_ec_catalog_uuid,
             'benefit_type': Benefit.PERCENTAGE,
             'benefit_value': expected_benefit_value,
+            'contract_discount_value': expected_discount_value,
+            'contract_discount_type': expected_discount_type,
+            'prepaid_invoice_amount': expected_prepaid_invoice_amount,
+            'sales_force_id': sales_force_id,
+            'usage_email_frequency': ConditionalOffer.DAILY
         }
-        response = self.client.post(self.path, data, follow=False)
-        enterprise_offer = ConditionalOffer.objects.get()
 
+        existing_offer_ids = list(ConditionalOffer.objects.all().values_list('id', flat=True))
+        response = self.client.post(self.path, data, follow=False)
+        conditional_offers = ConditionalOffer.objects.exclude(id__in=existing_offer_ids)
+        enterprise_offer = conditional_offers.first()
+        self.assertEqual(conditional_offers.count(), 1)
         self.assertRedirects(response, reverse('enterprise:offers:edit', kwargs={'pk': enterprise_offer.pk}))
         self.assertIsNone(enterprise_offer.start_datetime)
         self.assertIsNone(enterprise_offer.end_datetime)
+        self.assertEqual(enterprise_offer.sales_force_id, sales_force_id)
         self.assertEqual(enterprise_offer.condition.enterprise_customer_uuid, expected_ec_uuid)
         self.assertEqual(enterprise_offer.condition.enterprise_customer_catalog_uuid, expected_ec_catalog_uuid)
         self.assertEqual(enterprise_offer.benefit.type, '')
         self.assertEqual(enterprise_offer.benefit.value, expected_benefit_value)
         self.assertEqual(enterprise_offer.benefit.proxy_class, class_path(EnterprisePercentageDiscountBenefit))
+        self.assertEqual(
+            enterprise_offer.enterprise_contract_metadata.discount_value,
+            expected_discount_value
+        )
+        self.assertEqual(
+            enterprise_offer.enterprise_contract_metadata.discount_type,
+            expected_discount_type
+        )
+        self.assertEqual(
+            enterprise_offer.enterprise_contract_metadata.amount_paid,
+            expected_prepaid_invoice_amount
+        )
 
 
 class EnterpriseCouponAppViewTests(TestCase):

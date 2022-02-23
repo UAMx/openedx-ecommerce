@@ -1,7 +1,11 @@
+
+
 import json
 import logging
 from functools import wraps
-from urlparse import urlunsplit
+from urllib.parse import urlunsplit
+
+from django.db import transaction
 
 from ecommerce.courses.utils import mode_for_product
 
@@ -10,25 +14,28 @@ logger = logging.getLogger(__name__)
 ECOM_TRACKING_ID_FMT = 'ecommerce-{}'
 
 
-def parse_tracking_context(user):
-    """Extract user ID, client ID, and IP address from a user's tracking context.
+def parse_tracking_context(user, usage=None):
+    """
+    Extract user ID, client ID, and IP address from a user's tracking context.
+
+    Note: User ID has backups so it will always have a value.
 
     Arguments:
         user (User): An instance of the User model.
+        usage (string): Optional. A description of how the returned tuple will be used. This will be included in log
+            messages if the LMS user id cannot be found.
 
     Returns:
         Tuple of strings: user_tracking_id, ga_client_id, lms_ip
     """
-    tracking_context = user.tracking_context or {}
-
-    user_tracking_id = tracking_context.get('lms_user_id')
+    user_tracking_id = user.lms_user_id_with_metric(usage=usage)
     if user_tracking_id is None:
-        # Even if we cannot extract a good platform user ID from the context, we can still track the
-        # event with an arbitrary local user ID. However, we need to disambiguate the ID we choose
-        # since there's no guarantee it won't collide with a platform user ID that may be tracked
-        # at some point.
+        # If we still don't have the lms user ID, we will use the local user ID. However, we need
+        # to disambiguate the ID we choose since there's no guarantee it won't collide with the
+        # lms user ID that may be tracked at some point.
         user_tracking_id = ECOM_TRACKING_ID_FMT.format(user.id)
 
+    tracking_context = user.tracking_context or {}
     lms_ip = tracking_context.get('lms_ip')
     ga_client_id = tracking_context.get('ga_client_id')
 
@@ -104,8 +111,8 @@ def prepare_analytics_data(user, segment_key):
         }
     }
 
-    if user.is_authenticated():
-        user_tracking_id, __, __ = parse_tracking_context(user)
+    if user.is_authenticated:
+        user_tracking_id, _, __ = parse_tracking_context(user, usage='analytics')
         user_data = {
             'user': {
                 'user_tracking_id': user_tracking_id,
@@ -144,7 +151,7 @@ def track_segment_event(site, user, event, properties):
         logger.debug(msg)
         return False, msg
 
-    user_tracking_id, ga_client_id, lms_ip = parse_tracking_context(user)
+    user_tracking_id, ga_client_id, lms_ip = parse_tracking_context(user, usage=event)
     # construct a URL, so that hostname can be sent to GA.
     # For now, send a dummy value for path.  Segment parses the URL and sends
     # the host and path separately. When needed, the path can be fetched by adding:
@@ -165,7 +172,9 @@ def track_segment_event(site, user, event, properties):
             'url': page,
         }
     }
-    return site.siteconfiguration.segment_client.track(user_tracking_id, event, properties, context=context)
+    return transaction.on_commit(
+        lambda: site.siteconfiguration.segment_client.track(user_tracking_id, event, properties,
+                                                            context=context))
 
 
 def translate_basket_line_for_segment(line):

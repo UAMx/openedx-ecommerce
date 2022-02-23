@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
+
 
 from uuid import uuid4
 
@@ -10,17 +10,20 @@ from edx_django_utils.cache import TieredCache
 from mock import patch
 from oscar.core.loading import get_model
 from oscar.test import factories
-from requests.exceptions import ConnectionError, Timeout
+from requests.exceptions import ConnectionError as ReqConnectionError
+from requests.exceptions import Timeout
 from slumber.exceptions import SlumberBaseException
-from waffle.models import Switch
 
 from ecommerce.coupons.tests.mixins import CouponMixin, DiscoveryMockMixin
-from ecommerce.enterprise.constants import ENTERPRISE_OFFERS_FOR_COUPONS_SWITCH
 from ecommerce.extensions.catalogue.tests.mixins import DiscoveryTestMixin
+from ecommerce.extensions.offer.constants import ASSIGN, REMIND, REVOKE
+from ecommerce.tests.factories import UserFactory
 from ecommerce.tests.testcases import TestCase
 
 Catalog = get_model('catalogue', 'Catalog')
 ConditionalOffer = get_model('offer', 'ConditionalOffer')
+OfferAssignmentEmailTemplates = get_model('offer', 'OfferAssignmentEmailTemplates')
+OfferAssignmentEmailSentRecord = get_model('offer', 'OfferAssignmentEmailSentRecord')
 Range = get_model('offer', 'Range')
 
 
@@ -126,7 +129,7 @@ class RangeTests(CouponMixin, DiscoveryTestMixin, DiscoveryMockMixin, TestCase):
         # checking if course exists in course runs against the course catalog.
         self._assert_num_requests(2)
 
-    @ddt.data(ConnectionError, SlumberBaseException, Timeout)
+    @ddt.data(ReqConnectionError, SlumberBaseException, Timeout)
     def test_course_catalog_query_range_contains_product_for_failure(self, error):
         """
         Verify that the method "contains_product" raises exception if the
@@ -142,11 +145,11 @@ class RangeTests(CouponMixin, DiscoveryTestMixin, DiscoveryMockMixin, TestCase):
 
         self.mock_access_token_response()
         self.mock_discovery_api_failure(error, self.site_configuration.discovery_api_url, course_catalog_id)
-        with self.assertRaises(Exception) as error:
+        with self.assertRaises(Exception) as err:
             self.range.contains_product(seat)
 
         expected_exception_message = 'Unable to connect to Discovery Service for catalog contains endpoint.'
-        self.assertEqual(error.exception.message, expected_exception_message)
+        self.assertEqual(str(err.exception), expected_exception_message)
         # Verify that there only one call for the course discovery API for
         # checking if course exists in course runs against the course catalog.
         self._assert_num_requests(2)
@@ -376,35 +379,15 @@ class ConditionalOfferTests(DiscoveryTestMixin, DiscoveryMockMixin, TestCase):
         basket = self.create_basket(email='test@invalid.domain')
         self.assertFalse(self.offer.is_condition_satisfied(basket))
 
-    def test_condition_satisfied_for_enterprise_switch_off(self):
-        """Verify a condition is satisfied."""
-        Switch.objects.update_or_create(name=ENTERPRISE_OFFERS_FOR_COUPONS_SWITCH, defaults={'active': False})
-        valid_user_email = 'valid@{domain}'.format(domain=self.valid_sub_domain)
-        basket = factories.BasketFactory(site=self.site, owner=factories.UserFactory(email=valid_user_email))
-
-        _range = factories.RangeFactory(
-            products=[self.product, ],
-            course_seat_types='verified',
-            enterprise_customer=str(uuid4()).decode('utf-8'),
-            catalog_query='*:*'
-        )
-        benefit = factories.BenefitFactory(range=_range)
-        offer = factories.ConditionalOfferFactory(benefit=benefit)
-
-        with patch.object(benefit, 'get_applicable_lines', return_value=[1]):
-            basket.add_product(self.product)
-            self.assertTrue(offer.is_condition_satisfied(basket))
-
-    def test_condition_not_satisfied_for_enterprise_switch_on(self):
+    def test_condition_not_satisfied_for_enterprise(self):
         """Verify a condition is not satisfied."""
-        Switch.objects.update_or_create(name=ENTERPRISE_OFFERS_FOR_COUPONS_SWITCH, defaults={'active': True})
         valid_user_email = 'valid@{domain}'.format(domain=self.valid_sub_domain)
-        basket = factories.BasketFactory(site=self.site, owner=factories.UserFactory(email=valid_user_email))
+        basket = factories.BasketFactory(site=self.site, owner=UserFactory(email=valid_user_email))
 
         _range = factories.RangeFactory(
             products=[self.product, ],
             course_seat_types='verified',
-            enterprise_customer=str(uuid4()).decode('utf-8'),
+            enterprise_customer=str(uuid4()),
             catalog_query='*:*'
         )
         benefit = factories.BenefitFactory(range=_range)
@@ -418,7 +401,7 @@ class ConditionalOfferTests(DiscoveryTestMixin, DiscoveryMockMixin, TestCase):
         Verify that a basket satisfies a condition only when all of its products are in its range's catalog queryset.
         """
         valid_user_email = 'valid@{domain}'.format(domain=self.valid_sub_domain)
-        basket = factories.BasketFactory(site=self.site, owner=factories.UserFactory(email=valid_user_email))
+        basket = factories.BasketFactory(site=self.site, owner=UserFactory(email=valid_user_email))
         product = self.create_entitlement_product()
         another_product = self.create_entitlement_product()
 
@@ -448,7 +431,7 @@ class ConditionalOfferTests(DiscoveryTestMixin, DiscoveryMockMixin, TestCase):
         Verify that the condition for a single use coupon is only satisfied by single-product baskets.
         """
         valid_user_email = 'valid@{domain}'.format(domain=self.valid_sub_domain)
-        basket = factories.BasketFactory(site=self.site, owner=factories.UserFactory(email=valid_user_email))
+        basket = factories.BasketFactory(site=self.site, owner=UserFactory(email=valid_user_email))
         product1 = self.create_entitlement_product()
         product2 = self.create_entitlement_product()
 
@@ -555,7 +538,7 @@ class BenefitTests(DiscoveryTestMixin, DiscoveryMockMixin, TestCase):
         )
         self.benefit = factories.BenefitFactory(range=_range)
         self.offer = factories.ConditionalOfferFactory(benefit=self.benefit)
-        self.user = factories.UserFactory()
+        self.user = UserFactory()
 
     def test_range(self):
         with self.assertRaises(ValidationError):
@@ -597,3 +580,62 @@ class BenefitTests(DiscoveryTestMixin, DiscoveryMockMixin, TestCase):
         # Verify that the API return value is cached
         httpretty.disable()
         self.assertEqual(self.benefit.get_applicable_lines(self.offer, basket), applicable_lines)
+
+
+@ddt.ddt
+class TestOfferAssignmentEmailSentRecord(TestCase):
+    """Tests for the TestOfferAssignmentEmailSentRecord model."""
+
+    def _create_template(self, enterprise_customer, email_type):
+        """Helper method to create OfferAssignmentEmailTemplates instance with the given email type."""
+        return OfferAssignmentEmailTemplates.objects.create(
+            enterprise_customer=enterprise_customer,
+            email_type=email_type,
+            email_greeting='test greeting',
+            email_closing='test closing',
+            email_subject='template subject',
+            active=True,
+            name='test template'
+        )
+
+    def _create_email_sent_record(self, enterprise_customer, email_type, template):
+        """Helper method to create instance of OfferAssignmentEmailSentRecord."""
+        return OfferAssignmentEmailSentRecord.create_email_record(enterprise_customer, email_type, template)
+
+    @ddt.data(
+        (str(uuid4()), ASSIGN),
+        (str(uuid4()), REMIND),
+        (str(uuid4()), REVOKE),
+    )
+    @ddt.unpack
+    def test_string_representation(self, enterprise_customer, email_type):
+        """
+        Test the string representation of the TestOfferAssignmentEmailSentRecord model.
+        """
+        template = self._create_template(enterprise_customer, email_type)
+        email_record = self._create_email_sent_record(enterprise_customer, email_type, template)
+        expected_str = '{ec}-{email_type}'.format(ec=enterprise_customer, email_type=email_type)
+        assert expected_str == email_record.__str__()
+
+    @ddt.data(
+        (str(uuid4()), ASSIGN),
+        (str(uuid4()), REMIND),
+        (str(uuid4()), REVOKE),
+    )
+    @ddt.unpack
+    def test_create_email_record(self, enterprise_customer, email_type):
+        """
+        OfferAssignmentEmailSentRecord.create_email_record should create email record with given enterprise_customer,
+        email_type, and template.
+        """
+        # Verify that no record has been created yet
+        assert OfferAssignmentEmailSentRecord.objects.count() == 0
+        template = self._create_template(enterprise_customer, email_type)
+        email_record = OfferAssignmentEmailSentRecord.create_email_record(enterprise_customer, email_type, template)
+        # Verify that the class method created a record
+        assert OfferAssignmentEmailSentRecord.objects.count() == 1
+
+        # Verify that record was created with the provided values
+        assert email_record.enterprise_customer == enterprise_customer
+        assert email_record.email_type == email_type
+        assert email_record.template_id == template.id

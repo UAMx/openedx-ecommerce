@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
+
 
 from django.db import migrations, models
 
@@ -9,6 +9,8 @@ def add_short_code_data(apps, schema_editor):
     the field 'short_code'.
     """
     Partner = apps.get_model('partner', 'Partner')
+    Partner.skip_history_when_saving = True
+
     partners = Partner.objects.all()
     for partner in partners:
         partner.short_code = partner.code

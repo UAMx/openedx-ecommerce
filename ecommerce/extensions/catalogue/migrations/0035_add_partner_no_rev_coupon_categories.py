@@ -1,6 +1,6 @@
 """ Add 'Partner No Rev' categories to the list of default coupon categories"""
 
-from __future__ import unicode_literals
+
 
 from django.db import migrations
 from oscar.apps.catalogue.categories import create_from_breadcrumbs
@@ -17,12 +17,14 @@ DEFAULT_CATEGORIES = [
 
 def create_default_categories(apps, schema_editor):
     """Create default coupon categories."""
+    Category.skip_history_when_saving = True
     for category in DEFAULT_CATEGORIES:
         create_from_breadcrumbs('{} > {}'.format(COUPON_CATEGORY_NAME, category))
 
 
 def remove_default_categories(apps, schema_editor):
     """Remove default coupon categories."""
+    Category.skip_history_when_saving = True
     Category.objects.get(name=COUPON_CATEGORY_NAME).get_children().filter(
         name__in=DEFAULT_CATEGORIES
     ).delete()

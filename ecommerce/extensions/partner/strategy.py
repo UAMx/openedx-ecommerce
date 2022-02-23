@@ -1,3 +1,5 @@
+
+
 from django.utils import timezone
 from oscar.apps.partner import availability, strategy
 from oscar.core.loading import get_model
@@ -27,15 +29,15 @@ class CourseSeatAvailabilityPolicyMixin(strategy.StockRequired):
         is_available = product.expires is None or (product.expires >= timezone.now())
         if is_staff or is_available:
             return super(CourseSeatAvailabilityPolicyMixin, self).availability_policy(product, stockrecord)
-        else:
-            return availability.Unavailable()
+
+        return availability.Unavailable()
 
 
 class DefaultStrategy(strategy.UseFirstStockRecord, CourseSeatAvailabilityPolicyMixin,
                       strategy.NoTax, strategy.Structured):
-    pass
+    """ Default Strategy """
 
 
-class Selector(object):
+class Selector:
     def strategy(self, request=None, user=None, **kwargs):  # pylint: disable=unused-argument
         return DefaultStrategy(request if hasattr(request, 'user') else None)

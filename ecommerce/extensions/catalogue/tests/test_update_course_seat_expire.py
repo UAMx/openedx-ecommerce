@@ -1,5 +1,5 @@
 # encoding: utf-8
-from __future__ import unicode_literals
+
 
 import datetime
 import json
@@ -40,7 +40,7 @@ class UpdateSeatExpireDateTests(DiscoveryTestMixin, TestCase):
             'pagination': {},
             'results': [
                 {
-                    'enrollment_end': unicode(self.expire_date),
+                    'enrollment_end': str(self.expire_date),
                     'course_id': self.course.id
                 },
             ],

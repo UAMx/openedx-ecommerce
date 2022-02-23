@@ -1,3 +1,5 @@
+
+
 import logging
 
 from django.contrib import messages
@@ -14,7 +16,7 @@ class ManagementView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
     template_name = 'management/index.html'
 
     def test_func(self):
-        return self.request.user.is_superuser
+        return self.request.user.is_staff
 
     def _parse_basket_ids(self, s):
         basket_ids = []

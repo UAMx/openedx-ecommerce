@@ -1,36 +1,37 @@
 define([
     'jquery',
-    'views/course_list_view',
-    'collections/course_collection'
+    'views/course_list_view'
 ],
-    function($,
-              CourseListView,
-              CourseCollection) {
+    function($, CourseListView) {
         'use strict';
 
         describe('course list view', function() {
             var view,
-                collection,
-                courses = [
-                    {
-                        id: 'edX/DemoX.1/2014',
-                        name: 'DemoX',
-                        last_edited: '2015-06-16T19:14:34Z',
-                        type: 'honor'
-                    },
-                    {
-                        id: 'edX/victor101/Victor_s_Test_Course',
-                        name: 'Victor\'s Test Course',
-                        last_edited: '2015-06-16T19:42:55Z',
-                        type: 'professional'
-                    }
-                ];
+                courses = {
+                    recordsTotal: 2,
+                    recordsFiltered: 2,
+                    data: [
+                        {
+                            id: 'course-v1:edX+TextX+Test_Course_01',
+                            name: 'Test Course 1',
+                            type: 'verified',
+                            last_edited: new Date()
+                        },
+                        {
+                            id: 'course-v1:edX+TestX+Test_Course_02',
+                            name: 'Test Course 2',
+                            type: 'verified',
+                            last_edited: new Date()
+                        }
+                    ],
+                    draw: 1
+                };
 
             beforeEach(function() {
-                collection = new CourseCollection();
-                collection.set(courses);
-
-                view = new CourseListView({collection: collection}).render();
+                spyOn($, 'ajax').and.callFake(function(params) {
+                    params.success(courses);
+                });
+                view = new CourseListView().render();
             });
 
             it('should change the default filter placeholder to a custom string', function() {
@@ -44,9 +45,9 @@ define([
                 expect($tableInput.hasClass('form-control input-sm')).toBeFalsy();
             });
 
-            it('should populate the table based on the course collection', function() {
+            it('should populate the table based on the course api response', function() {
                 var tableData = view.$el.find('#courseTable').DataTable().data();
-                expect(tableData.data().length).toBe(collection.length);
+                expect(tableData.data().length).toBe(courses.data.length);
             });
         });
     }

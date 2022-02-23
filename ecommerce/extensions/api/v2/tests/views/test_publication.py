@@ -1,3 +1,5 @@
+
+
 import json
 from copy import deepcopy
 from datetime import datetime
@@ -188,8 +190,9 @@ class AtomicPublicationTests(DiscoveryTestMixin, TestCase):
             else:
                 attrs['expires'] = EXPIRES if product['expires'] else None
                 attrs['price'] = Decimal(product['price'])
-
-                course.create_or_update_seat(**attrs)
+                seat = course.create_or_update_seat(**attrs)
+                # The stockrecord partner sku is used for updates
+                product['stockrecords'] = [{'partner_sku': seat.stockrecords.first().partner_sku}]
 
     def generate_update_payload(self):
         """ Returns dictionary representing the data payload sent for an update request. """
@@ -205,7 +208,6 @@ class AtomicPublicationTests(DiscoveryTestMixin, TestCase):
 
         # Strip course_id, which should be absent from PUT requests.
         updated_data.pop('id')
-
         return updated_data
 
     def assert_course_does_not_exist(self, course_id):
@@ -255,6 +257,8 @@ class AtomicPublicationTests(DiscoveryTestMixin, TestCase):
         expires = EXPIRES if expected['expires'] else None
         self.assertEqual(seat.expires, expires)
         self.assertEqual(seat.stockrecords.get(partner=self.partner).price_excl_tax, expected['price'])
+
+        return seat
 
     def assert_course_saved(self, course_id, expected, enrollment_code_count=0):
         """Verify that the expected Course and associated products have been saved."""
@@ -337,6 +341,18 @@ class AtomicPublicationTests(DiscoveryTestMixin, TestCase):
             self.assertEqual(response.status_code, 200)
             self.assert_course_saved(self.course_id, expected=updated_data, enrollment_code_count=1)
 
+    def test_sku_returned(self):
+        """Verify that the newly created product SKU is returned in the response."""
+        with mock.patch.object(LMSPublisher, 'publish') as mock_publish:
+            mock_publish.return_value = None
+            response = self.client.post(self.create_path, json.dumps(self.data), JSON_CONTENT_TYPE)
+
+        self.assertEqual(response.status_code, 201)
+
+        seat = self.assert_seat_saved(Course.objects.first(), self.data['products'][0])
+        record = seat.stockrecords.first()
+        self.assertEqual(response.data['products'][0]['partner_sku'], record.partner_sku)
+
     def test_invalid_course_id(self):
         """Verify that attempting to save a course with a bad ID yields a 400."""
         self.data['id'] = 'Not an ID'
@@ -370,9 +386,7 @@ class AtomicPublicationTests(DiscoveryTestMixin, TestCase):
         response = self.client.post(self.create_path, json.dumps(self.data), JSON_CONTENT_TYPE)
         self.assertEqual(response.status_code, 400)
         self.assertEqual(
-            response.data.get('uuid')[0],
-            u'"foo-bar" is not a valid UUID.'
-        )
+            str(response.data.get('uuid')[0]), 'Must be a valid UUID.')
         self.assert_course_does_not_exist(self.course_id)
 
     def test_invalid_product_class(self):

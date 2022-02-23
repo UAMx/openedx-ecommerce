@@ -1,31 +1,94 @@
-from __future__ import unicode_literals
+
 
 import logging
+from decimal import Decimal
 from uuid import UUID
 
-import waffle
+import crum
+from django.contrib import messages
+from django.db.models import Sum
+from django.utils.translation import ugettext as _
 from oscar.core.loading import get_model
-from requests.exceptions import ConnectionError, Timeout
+from requests.exceptions import ConnectionError as ReqConnectionError
+from requests.exceptions import Timeout
 from slumber.exceptions import SlumberHttpBaseException
 
-from ecommerce.enterprise.api import catalog_contains_course_runs, fetch_enterprise_learner_data
-from ecommerce.enterprise.constants import ENTERPRISE_OFFERS_FOR_COUPONS_SWITCH, ENTERPRISE_OFFERS_SWITCH
+from ecommerce.courses.utils import get_course_info_from_catalog
+from ecommerce.enterprise.api import catalog_contains_course_runs, get_enterprise_id_for_user
+from ecommerce.enterprise.utils import get_or_create_enterprise_customer_user
 from ecommerce.extensions.basket.utils import ENTERPRISE_CATALOG_ATTRIBUTE_TYPE
+from ecommerce.extensions.fulfillment.status import ORDER
 from ecommerce.extensions.offer.constants import OFFER_ASSIGNMENT_REVOKED, OFFER_REDEEMED
-from ecommerce.extensions.offer.decorators import check_condition_applicability
 from ecommerce.extensions.offer.mixins import ConditionWithoutRangeMixin, SingleItemConsumptionConditionMixin
+from ecommerce.extensions.offer.models import OFFER_PRIORITY_ENTERPRISE
+from ecommerce.extensions.offer.utils import get_benefit_type, get_discount_value
 
 BasketAttribute = get_model('basket', 'BasketAttribute')
 BasketAttributeType = get_model('basket', 'BasketAttributeType')
+Benefit = get_model('offer', 'Benefit')
 Condition = get_model('offer', 'Condition')
 ConditionalOffer = get_model('offer', 'ConditionalOffer')
 OfferAssignment = get_model('offer', 'OfferAssignment')
+Order = get_model('order', 'Order')
+OrderDiscount = get_model('order', 'OrderDiscount')
+StockRecord = get_model('partner', 'StockRecord')
 Voucher = get_model('voucher', 'Voucher')
 logger = logging.getLogger(__name__)
 
 
+def is_offer_max_user_discount_available(basket, offer):
+    """Calculate if the user has the per user discount amount available"""
+    # no need to do anything if this is not an enterprise offer or `user_max_discount` is not set
+    if offer.priority != OFFER_PRIORITY_ENTERPRISE or offer.max_user_discount is None:
+        return True
+    discount_value = _get_basket_discount_value(basket, offer)
+    # check if offer has discount available for user
+    sum_user_discounts_for_this_offer = OrderDiscount.objects.filter(
+        offer_id=offer.id, order__user_id=basket.owner.id, order__status=ORDER.COMPLETE
+    ).aggregate(Sum('amount'))['amount__sum'] or Decimal(0.00)
+    new_total_discount = discount_value + sum_user_discounts_for_this_offer
+    if new_total_discount <= offer.max_user_discount:
+        return True
+
+    return False
+
+
+def is_offer_max_discount_available(basket, offer):
+    """Calculate if the offer has available discount"""
+    # no need to do anything if this is not an enterprise offer or `max_discount` is not set
+    if offer.priority != OFFER_PRIORITY_ENTERPRISE or offer.max_discount is None:
+        return True
+    discount_value = _get_basket_discount_value(basket, offer)
+    # check if offer has discount available
+    new_total_discount = discount_value + offer.total_discount
+    if new_total_discount <= offer.max_discount:
+        return True
+
+    return False
+
+
+def _get_basket_discount_value(basket, offer):
+    """Calculate the discount value based on benefit type and value"""
+    sum_basket_lines = basket.all_lines().aggregate(total=Sum('stockrecord__price_excl_tax'))['total'] or Decimal(0.0)
+    # calculate discount value that will be covered by the offer
+    benefit_type = get_benefit_type(offer.benefit)
+    benefit_value = offer.benefit.value
+    if benefit_type == Benefit.PERCENTAGE:
+        discount_value = get_discount_value(float(offer.benefit.value), float(sum_basket_lines))
+        discount_value = Decimal(discount_value)
+    else:  # Benefit.FIXED
+        # There is a possibility that the discount value could be greater than the sum of basket lines
+        # ie, discount value is $100, basket lines are $75, in this case the full price of the basket lines
+        # will be covered and learner will owe $0 to checkout.
+        if benefit_value > sum_basket_lines:
+            discount_value = sum_basket_lines
+        else:
+            discount_value = benefit_value
+    return discount_value
+
+
 class EnterpriseCustomerCondition(ConditionWithoutRangeMixin, SingleItemConsumptionConditionMixin, Condition):
-    class Meta(object):
+    class Meta:
         app_label = 'enterprise'
         proxy = True
 
@@ -33,7 +96,6 @@ class EnterpriseCustomerCondition(ConditionWithoutRangeMixin, SingleItemConsumpt
     def name(self):
         return "Basket contains a seat from {}'s catalog".format(self.enterprise_customer_name)
 
-    @check_condition_applicability([ENTERPRISE_OFFERS_SWITCH])
     def is_satisfied(self, offer, basket):  # pylint: disable=unused-argument
         """
         Determines if a user is eligible for an enterprise customer offer
@@ -57,50 +119,90 @@ class EnterpriseCustomerCondition(ConditionWithoutRangeMixin, SingleItemConsumpt
             # An anonymous user is never linked to any EnterpriseCustomer.
             return False
 
-        if (offer.offer_type == ConditionalOffer.VOUCHER and
-                not waffle.switch_is_active(ENTERPRISE_OFFERS_FOR_COUPONS_SWITCH)):
-            logger.info('Skipping Voucher type enterprise conditional offer until we are ready to support it.')
-            return False
+        enterprise_in_condition = str(self.enterprise_customer_uuid)
+        enterprise_catalog = str(self.enterprise_customer_catalog_uuid) if self.enterprise_customer_catalog_uuid \
+            else None
+        enterprise_name_in_condition = str(self.enterprise_customer_name)
+        username = basket.owner.username
 
-        learner_data = {}
-        try:
-            learner_data = fetch_enterprise_learner_data(basket.site, basket.owner)['results'][0]
-        except (ConnectionError, KeyError, SlumberHttpBaseException, Timeout):
-            logger.exception(
-                'Failed to retrieve enterprise learner data for site [%s] and user [%s].',
-                basket.site.domain,
-                basket.owner.username,
-            )
-            return False
-        except IndexError:
-            if offer.offer_type == ConditionalOffer.SITE:
-                logger.debug(
-                    'Unable to apply enterprise site offer %s because no learner data was returned for user %s',
-                    offer.id,
-                    basket.owner)
-                return False
-
-        if (learner_data and 'enterprise_customer' in learner_data and
-                str(self.enterprise_customer_uuid) != learner_data['enterprise_customer']['uuid']):
-            # Learner is not linked to the EnterpriseCustomer associated with this condition.
-            logger.debug('Unable to apply enterprise offer %s because Learner\'s enterprise (%s)'
-                         'does not match this conditions\'s enterprise (%s).',
-                         offer.id,
-                         learner_data['enterprise_customer']['uuid'],
-                         str(self.enterprise_customer_uuid))
-            return False
-
-        course_run_ids = []
+        # This variable will hold both course keys and course run identifiers.
+        course_ids = []
         for line in basket.all_lines():
+            if line.product.is_course_entitlement_product:
+                try:
+                    response = get_course_info_from_catalog(basket.site, line.product)
+                except (ReqConnectionError, KeyError, SlumberHttpBaseException, Timeout) as exc:
+                    logger.exception(
+                        '[Code Redemption Failure] Unable to apply enterprise offer because basket '
+                        'contains a course entitlement product but we failed to get course info from  '
+                        'course entitlement product.'
+                        'User: %s, Offer: %s, Message: %s, Enterprise: %s, Catalog: %s, Course UUID: %s',
+                        username,
+                        offer.id,
+                        exc,
+                        enterprise_in_condition,
+                        enterprise_catalog,
+                        line.product.attr.UUID
+                    )
+                    return False
+                else:
+                    course_ids.append(response['key'])
+
+                    # Skip to the next iteration.
+                    continue
+
             course = line.product.course
             if not course:
                 # Basket contains products not related to a course_run.
-                logger.warning('Unable to apply enterprise offer %s because '
-                               'the Basket (#%s) contains a product (#%s) not related to a course_run.',
-                               offer.id, basket.id, line.product.id)
+                # Only log for non-site offers to avoid noise.
+                if offer.offer_type != ConditionalOffer.SITE:
+                    logger.warning('[Code Redemption Failure] Unable to apply enterprise offer because '
+                                   'the Basket contains a product not related to a course_run. '
+                                   'User: %s, Offer: %s, Product: %s, Enterprise: %s, Catalog: %s',
+                                   username,
+                                   offer.id,
+                                   line.product.id,
+                                   enterprise_in_condition,
+                                   enterprise_catalog)
                 return False
 
-            course_run_ids.append(course.id)
+            course_ids.append(course.id)
+
+        courses_in_basket = ','.join(course_ids)
+        user_enterprise = get_enterprise_id_for_user(basket.site, basket.owner)
+        if user_enterprise and enterprise_in_condition != user_enterprise:
+            # Learner is not linked to the EnterpriseCustomer associated with this condition.
+            if offer.offer_type == ConditionalOffer.VOUCHER:
+                logger.warning('[Code Redemption Failure] Unable to apply enterprise offer because Learner\'s '
+                               'enterprise (%s) does not match this conditions\'s enterprise (%s). '
+                               'User: %s, Offer: %s, Enterprise: %s, Catalog: %s, Courses: %s',
+                               user_enterprise,
+                               enterprise_in_condition,
+                               username,
+                               offer.id,
+                               enterprise_in_condition,
+                               enterprise_catalog,
+                               courses_in_basket)
+
+                logger.info(
+                    '[Code Redemption Issue] Linking learner with the enterprise in Condition. '
+                    'User [%s], Enterprise [%s]',
+                    username,
+                    enterprise_in_condition
+                )
+                get_or_create_enterprise_customer_user(
+                    basket.site,
+                    enterprise_in_condition,
+                    username,
+                    False
+                )
+                msg = _('This coupon has been made available through {new_enterprise}. '
+                        'To redeem this coupon, you must first logout. When you log back in, '
+                        'please select {new_enterprise} as your enterprise '
+                        'and try again.').format(new_enterprise=enterprise_name_in_condition)
+                messages.warning(crum.get_current_request(), msg,)
+
+            return False
 
         # Verify that the current conditional offer is related to the provided
         # enterprise catalog, this will also filter out offers which don't
@@ -114,13 +216,61 @@ class EnterpriseCustomerCondition(ConditionWithoutRangeMixin, SingleItemConsumpt
                                offer.id, catalog, offer.condition.enterprise_customer_catalog_uuid)
                 return False
 
-        if not catalog_contains_course_runs(basket.site, course_run_ids, self.enterprise_customer_uuid,
-                                            enterprise_customer_catalog_uuid=self.enterprise_customer_catalog_uuid):
+        try:
+            catalog_contains_course = catalog_contains_course_runs(
+                basket.site, course_ids, enterprise_in_condition,
+                enterprise_customer_catalog_uuid=enterprise_catalog
+            )
+        except (ReqConnectionError, KeyError, SlumberHttpBaseException, Timeout) as exc:
+            logger.exception('[Code Redemption Failure] Unable to apply enterprise offer because '
+                             'we failed to check if course_runs exist in the catalog. '
+                             'User: %s, Offer: %s, Message: %s, Enterprise: %s, Catalog: %s, Courses: %s',
+                             username,
+                             offer.id,
+                             exc,
+                             enterprise_in_condition,
+                             enterprise_catalog,
+                             courses_in_basket)
+            return False
+
+        if not catalog_contains_course:
             # Basket contains course runs that do not exist in the EnterpriseCustomerCatalogs
             # associated with the EnterpriseCustomer.
-            logger.warning('Unable to apply enterprise offer %s because '
-                           'Enterprise catalog (%s) does not contain the course(s) (%s) in this basket.',
-                           offer.id, self.enterprise_customer_catalog_uuid, ','.join(course_run_ids))
+            logger.warning('[Code Redemption Failure] Unable to apply enterprise offer because '
+                           'Enterprise catalog does not contain the course(s) in this basket. '
+                           'User: %s, Offer: %s, Enterprise: %s, Catalog: %s, Courses: %s',
+                           username,
+                           offer.id,
+                           enterprise_in_condition,
+                           enterprise_catalog,
+                           courses_in_basket)
+            return False
+
+        if not is_offer_max_discount_available(basket, offer):
+            logger.warning(
+                '[Enterprise Offer Failure] Unable to apply enterprise offer because bookings limit is consumed.'
+                'User: %s, Offer: %s, Enterprise: %s, Catalog: %s, Courses: %s, BookingsLimit: %s, TotalDiscount: %s',
+                username,
+                offer.id,
+                enterprise_in_condition,
+                enterprise_catalog,
+                courses_in_basket,
+                offer.max_discount,
+                offer.total_discount,
+            )
+            return False
+
+        if not is_offer_max_user_discount_available(basket, offer):
+            logger.warning(
+                '[Enterprise Offer Failure] Unable to apply enterprise offer because user bookings limit is consumed.'
+                'User: %s, Offer: %s, Enterprise: %s, Catalog: %s, Courses: %s, UserBookingsLimit: %s',
+                username,
+                offer.id,
+                enterprise_in_condition,
+                enterprise_catalog,
+                courses_in_basket,
+                offer.max_user_discount
+            )
             return False
 
         return True
@@ -162,7 +312,7 @@ class EnterpriseCustomerCondition(ConditionWithoutRangeMixin, SingleItemConsumpt
 
 class AssignableEnterpriseCustomerCondition(EnterpriseCustomerCondition):
     """An enterprise condition that can be redeemed by one or more assigned users."""
-    class Meta(object):
+    class Meta:
         app_label = 'enterprise'
         proxy = True
 
@@ -197,5 +347,21 @@ class AssignableEnterpriseCustomerCondition(EnterpriseCustomerCondition):
         # basket owner can redeem the voucher if free slots are avialable
         if voucher.slots_available_for_assignment:
             return True
+
+        messages.warning(
+            crum.get_current_request(),
+            _('This code is not valid with your email. '
+              'Please login with the correct email assigned '
+              'to the code or contact your Learning Manager '
+              'for additional questions.'),
+        )
+
+        logger.warning('[Code Redemption Failure] Unable to apply enterprise offer because '
+                       'the voucher has not been assigned to this user and their are no remaining available uses. '
+                       'User: %s, Offer: %s, Enterprise: %s, Catalog: %s',
+                       basket.owner.username,
+                       offer.id,
+                       self.enterprise_customer_uuid,
+                       self.enterprise_customer_catalog_uuid)
 
         return False

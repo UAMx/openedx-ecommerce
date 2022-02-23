@@ -1,9 +1,12 @@
 """Production settings and globals."""
+
+
 import codecs
 from os import environ
-from urlparse import urljoin
+from urllib.parse import urljoin
 
 import yaml
+from corsheaders.defaults import default_headers as corsheaders_default_headers
 # Normally you should not import ANYTHING from Django directly
 # into your settings, but ImproperlyConfigured is an exception.
 from django.core.exceptions import ImproperlyConfigured
@@ -46,6 +49,10 @@ ALLOWED_HOSTS = ['*']
 # the values read from disk should UPDATE the pre-configured dicts.
 DICT_UPDATE_KEYS = ('JWT_AUTH',)
 
+# Set empty defaults for the logging override settings
+LOGGING_ROOT_OVERRIDES = {}
+LOGGING_SUBSECTION_OVERRIDES = {}
+
 CONFIG_FILE = get_env_setting('ECOMMERCE_CFG')
 with codecs.open(CONFIG_FILE, encoding='utf-8') as f:
     config_from_yaml = yaml.load(f)
@@ -69,13 +76,30 @@ DB_OVERRIDES = dict(
     PORT=environ.get('DB_MIGRATION_PORT', DATABASES['default']['PORT']),
 )
 
-for override, value in DB_OVERRIDES.iteritems():
+for override, value in DB_OVERRIDES.items():
     DATABASES['default'][override] = value
+
+for key, value in LOGGING_ROOT_OVERRIDES.items():
+    if value is None:
+        del LOGGING[key]
+    else:
+        LOGGING[key] = value
+
+for section, overrides in LOGGING_SUBSECTION_OVERRIDES.items():
+    if overrides is None:
+        del LOGGING[section]
+    else:
+        for key, value in overrides.items():
+            if value is None:
+                del LOGGING[section][key]
+            else:
+                LOGGING[section][key] = value
+
 
 
 # PAYMENT PROCESSOR OVERRIDES
-for __, configs in PAYMENT_PROCESSOR_CONFIG.iteritems():
-    for __, config in configs.iteritems():
+for __, configs in PAYMENT_PROCESSOR_CONFIG.items():
+    for __, config in configs.items():
         config.update({
             'receipt_path': PAYMENT_PROCESSOR_RECEIPT_PATH,
             'cancel_checkout_path': PAYMENT_PROCESSOR_CANCEL_PATH,
@@ -84,3 +108,9 @@ for __, configs in PAYMENT_PROCESSOR_CONFIG.iteritems():
 # END PAYMENT PROCESSOR OVERRIDES
 
 ENTERPRISE_API_URL = urljoin(ENTERPRISE_SERVICE_URL, 'api/v1/')
+
+ENTERPRISE_CATALOG_API_URL = urljoin(ENTERPRISE_CATALOG_SERVICE_URL, 'api/v1/')
+
+CORS_ALLOW_HEADERS = corsheaders_default_headers + (
+    'use-jwt-cookie',
+)

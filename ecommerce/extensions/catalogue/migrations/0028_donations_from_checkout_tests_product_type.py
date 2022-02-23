@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
+
 
 from django.db import migrations
 from oscar.core.loading import get_model
@@ -15,6 +15,9 @@ ProductClass = get_model("catalogue", "ProductClass")
 
 def create_product_class(apps, schema_editor):  # pylint: disable=unused-argument
     """ Create a donation product class for donations from checkout tests """
+
+    ProductClass.skip_history_when_saving = True
+    Category.skip_history_when_saving = True
 
     # Create a new product class for donations for the donations from checkout tests
     donation, __ = ProductClass.objects.get_or_create(
@@ -34,6 +37,10 @@ def create_product_class(apps, schema_editor):  # pylint: disable=unused-argumen
 
 def remove_product_class(apps, schema_editor):  # pylint: disable=unused-argument
     """ Reverse function. """
+    ProductClass.skip_history_when_saving = True
+    Product.skip_history_when_saving = True
+    Category.skip_history_when_saving = True
+
     donation_class = ProductClass.objects.get(name=DONATIONS_FROM_CHECKOUT_TESTS_PRODUCT_TYPE_NAME)
     Product.objects.filter(product_class=donation_class).delete()
     Category.objects.filter(slug='donations').delete()

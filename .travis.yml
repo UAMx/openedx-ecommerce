@@ -1,11 +1,9 @@
 language: python
-python:
-  - "2.7"
+dist: focal
 
 branches:
   only:
     - master
-    - open-release/ironwood.master
 
 sudo: required
 services:
@@ -25,37 +23,36 @@ addons:
 before_install:
   - docker-compose -f ./.travis/docker-compose-travis.yml up -d
 
+install:
+  - docker exec -t ecommerce_testing bash -c "
+      cd /edx/app/ecommerce/ecommerce/ &&
+      python3 -m pip install tox
+    "
+script:
+  - docker exec -t -e TRAVIS=1 ecommerce_testing bash -c "
+      cd /edx/app/ecommerce/ecommerce/ &&
+      PATH=\$PATH:/edx/app/ecommerce/nodeenvs/ecommerce/bin:/snap/bin
+      DJANGO_ENV=$DJANGO_ENV make $TARGETS
+    "
+
 matrix:
   include:
-    - env: TESTNAME=quality-and-js
-
-      install:
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/ && make requirements'
-
-      script:
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/docs && make html'
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/ && DJANGO_SETTINGS_MODULE=ecommerce.settings.test make check_translations_up_to_date'
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/ && DJANGO_SETTINGS_MODULE=ecommerce.settings.devstack make validate_translations'
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/ && DJANGO_SETTINGS_MODULE=ecommerce.settings.test make clean_static'
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/ && DJANGO_SETTINGS_MODULE=ecommerce.settings.test make static'
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/ && DJANGO_SETTINGS_MODULE=ecommerce.settings.test make run_check_isort'
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/ && DJANGO_SETTINGS_MODULE=ecommerce.settings.test make run_pep8'
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/ && DJANGO_SETTINGS_MODULE=ecommerce.settings.test make run_pylint'
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/ && DJANGO_SETTINGS_MODULE=ecommerce.settings.test xvfb-run make validate_js'
-
-
-    - env: TESTNAME=test-python
-
-      install:
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/ && make requirements'
-
-      script:
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/docs && make html'
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/ && DJANGO_SETTINGS_MODULE=ecommerce.settings.test make clean_static'
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/ && DJANGO_SETTINGS_MODULE=ecommerce.settings.test make static'
-        - docker exec -t ecommerce_testing bash -c 'source /edx/app/ecommerce/ecommerce_env && cd /edx/app/ecommerce/ecommerce/ && DJANGO_SETTINGS_MODULE=ecommerce.settings.test TRAVIS=1 xvfb-run make validate_python'
-
+    - python: 3.8
+      env:
+        DJANGO_ENV=django22
+        TESTNAME=quality-and-js
+        TARGETS="PYTHON_ENV=py38 requirements.js check_translations_up_to_date validate_translations clean_static static quality validate_js check_keywords"
+    - python: 3.8
+      env:
+        DJANGO_ENV=django22
+        TESTNAME=test-python
+        TARGETS="PYTHON_ENV=py38 requirements.js clean_static static validate_python"
       after_success:
-        - pip install -U codecov
+        - pip3 install -U codecov
         - docker exec ecommerce_testing /edx/app/ecommerce/ecommerce/.travis/run_coverage.sh
         - codecov
+    - python: 3.8
+      env:
+        DJANGO_ENV=django22
+        TESTNAME=test-python
+        TARGETS="PYTHON_ENV=py38 requirements.js clean_static static acceptance"

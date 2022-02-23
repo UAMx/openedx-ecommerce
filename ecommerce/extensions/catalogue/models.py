@@ -1,10 +1,21 @@
+
+
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import models
 from django.db.models.signals import post_init, post_save
 from django.dispatch import receiver
 from django.utils.translation import ugettext_lazy as _
-from oscar.apps.catalogue.abstract_models import AbstractProduct
+from oscar.apps.catalogue.abstract_models import (
+    AbstractCategory,
+    AbstractOption,
+    AbstractProduct,
+    AbstractProductAttribute,
+    AbstractProductAttributeValue,
+    AbstractProductCategory,
+    AbstractProductClass
+)
+from simple_history.models import HistoricalRecords
 
 from ecommerce.core.constants import (
     COUPON_PRODUCT_CLASS_NAME,
@@ -13,7 +24,40 @@ from ecommerce.core.constants import (
     SEAT_PRODUCT_CLASS_NAME
 )
 from ecommerce.core.utils import log_message_and_raise_validation_error
-from ecommerce.journals.constants import JOURNAL_PRODUCT_CLASS_NAME  # TODO: journals dependency
+
+
+class CreateSafeHistoricalRecords(HistoricalRecords):
+    """
+    Overrides default HistoricalRecords so that newly created rows can avoid being saved to history.
+
+    This prevents errors during migrations with models that have HistoricalRecords and also
+    try to create rows as part of their migrations (before the history table is created).
+    """
+    def post_save(self, instance, created, using=None, **kwargs):
+        """
+        The only difference between this method and the original is the first line, which omits a check to
+        see if the object is newly created:
+        https://github.com/treyhunner/django-simple-history/blob/2.7.2/simple_history/models.py#L456
+        """
+        if hasattr(instance, "skip_history_when_saving"):
+            return
+        if not kwargs.get("raw", False):  # pragma: no cover
+            self.create_historical_record(instance, created and "+" or "~", using=using)
+
+    def post_delete(self, instance, using=None, **kwargs):
+        """
+        The only difference between this method and the original is the addition of first line, which
+        extends "skip_history_when_saving" checks to deletes:
+        https://github.com/treyhunner/django-simple-history/blob/2.7.2/simple_history/models.py#L460
+        """
+        if hasattr(instance, "skip_history_when_saving"):
+            return
+
+        if self.cascade_delete_history:  # pragma: no cover
+            manager = getattr(instance, self.manager_name)
+            manager.using(using).all().delete()
+        else:
+            self.create_historical_record(instance, "-", using=using)
 
 
 class Product(AbstractProduct):
@@ -23,6 +67,8 @@ class Product(AbstractProduct):
     expires = models.DateTimeField(null=True, blank=True,
                                    help_text=_('Last date/time on which this product can be purchased.'))
     original_expires = None
+
+    history = HistoricalRecords()
 
     @property
     def is_seat_product(self):
@@ -36,18 +82,13 @@ class Product(AbstractProduct):
     def is_course_entitlement_product(self):
         return self.get_product_class().name == COURSE_ENTITLEMENT_PRODUCT_CLASS_NAME
 
-    # TODO: journals dependency
-    @property
-    def is_journal_product(self):
-        return self.get_product_class().name == JOURNAL_PRODUCT_CLASS_NAME
-
     @property
     def is_coupon_product(self):
         return self.get_product_class().name == COUPON_PRODUCT_CLASS_NAME
 
     def save(self, *args, **kwargs):
         try:
-            if not isinstance(self.attr.note, basestring) and self.attr.note is not None:
+            if not isinstance(self.attr.note, str) and self.attr.note is not None:
                 log_message_and_raise_validation_error(
                     'Failed to create Product. Product note value must be of type string'
                 )
@@ -99,16 +140,47 @@ def update_enrollment_code(sender, **kwargs):  # pylint: disable=unused-argument
         instance.original_expires = instance.expires
 
 
+class ProductAttributeValue(AbstractProductAttributeValue):
+    history = CreateSafeHistoricalRecords()
+
+
 class Catalog(models.Model):
     name = models.CharField(max_length=255)
     partner = models.ForeignKey('partner.Partner', related_name='catalogs', on_delete=models.CASCADE)
     stock_records = models.ManyToManyField('partner.StockRecord', blank=True, related_name='catalogs')
 
-    def __unicode__(self):
+    def __str__(self):
         return u'{id}: {partner_code}-{catalog_name}'.format(
             id=self.id,
             partner_code=self.partner.short_code,
             catalog_name=self.name
         )
+
+
+class Category(AbstractCategory):
+    # Do not record the slug field in the history table because AutoSlugField is not compatible with
+    # django-simple-history.  Background: https://github.com/edx/course-discovery/pull/332
+    history = CreateSafeHistoricalRecords(excluded_fields=['slug'])
+
+
+class Option(AbstractOption):
+    # Do not record the code field in the history table because AutoSlugField is not compatible with
+    # django-simple-history.  Background: https://github.com/edx/course-discovery/pull/332
+    history = CreateSafeHistoricalRecords(excluded_fields=['code'])
+
+
+class ProductClass(AbstractProductClass):
+    # Do not record the slug field in the history table because AutoSlugField is not compatible with
+    # django-simple-history.  Background: https://github.com/edx/course-discovery/pull/332
+    history = CreateSafeHistoricalRecords(excluded_fields=['slug'])
+
+
+class ProductCategory(AbstractProductCategory):
+    history = CreateSafeHistoricalRecords()
+
+
+class ProductAttribute(AbstractProductAttribute):
+    history = CreateSafeHistoricalRecords()
+
 
 from oscar.apps.catalogue.models import *  # noqa isort:skip pylint: disable=wildcard-import,unused-wildcard-import,wrong-import-position,wrong-import-order,ungrouped-imports

@@ -1,6 +1,8 @@
 """
 Decorators related to enterprise functionality.
 """
+
+
 from functools import wraps
 
 from oscar.core.loading import get_model

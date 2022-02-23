@@ -1,3 +1,5 @@
+
+
 import ddt
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -21,13 +23,14 @@ class UpdateOrderLinePartnerTests(TestCase):
 
     def assert_error_log(self, error_msg, *args):
         """Helper to call command and assert error log."""
-        with self.assertRaisesRegexp(CommandError, error_msg):
+        with self.assertRaisesRegex(CommandError, error_msg):
             call_command('update_order_lines_partner', *args)
 
     def test_partner_required(self):
         """Test that command raises partner required error."""
+        err_msg = 'Error: the following arguments are required: --partner'
         self.assert_error_log(
-            'Error: argument --partner is required',
+            err_msg,
             'sku12345'
         )
 

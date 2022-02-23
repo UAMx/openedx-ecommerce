@@ -1,5 +1,5 @@
 """Order Utility Classes. """
-from __future__ import unicode_literals
+
 
 import logging
 
@@ -10,7 +10,8 @@ from edx_rest_api_client.client import EdxRestApiClient
 from edx_rest_api_client.exceptions import HttpNotFoundError
 from oscar.apps.order.utils import OrderCreator as OscarOrderCreator
 from oscar.core.loading import get_model
-from requests.exceptions import ConnectionError, ConnectTimeout  # pylint: disable=ungrouped-imports
+from requests.exceptions import ConnectionError as ReqConnectionError  # pylint: disable=ungrouped-imports
+from requests.exceptions import ConnectTimeout
 from threadlocals.threadlocals import get_current_request
 
 from ecommerce.core.url_utils import get_lms_entitlement_api_url
@@ -26,7 +27,7 @@ OrderLine = get_model('order', 'Line')
 RefundLine = get_model('refund', 'RefundLine')
 
 
-class OrderNumberGenerator(object):
+class OrderNumberGenerator:
     OFFSET = 100000
 
     def order_number(self, basket):
@@ -107,7 +108,7 @@ class OrderCreator(OscarOrderCreator):
             order_data['shipping_address'] = shipping_address
         if billing_address:
             order_data['billing_address'] = billing_address
-        if user and user.is_authenticated():
+        if user and user.is_authenticated:
             order_data['user_id'] = user.id
         if status:
             order_data['status'] = status
@@ -128,7 +129,7 @@ class OrderCreator(OscarOrderCreator):
         return order
 
 
-class UserAlreadyPlacedOrder(object):
+class UserAlreadyPlacedOrder:
     """
     Provides utils methods to check if user has already placed an order
     """
@@ -188,19 +189,20 @@ class UserAlreadyPlacedOrder(object):
         entitlement_option = Option.objects.get(code='course_entitlement')
 
         orders_lines = OrderLine.objects.filter(product=product, order__user=user)
-        if orders_lines:
-            for order_line in orders_lines:
-                if not UserAlreadyPlacedOrder.is_order_line_refunded(order_line):
-                    if not order_line.product.is_course_entitlement_product:
+        for order_line in orders_lines:
+            if not UserAlreadyPlacedOrder.is_order_line_refunded(order_line):
+                if not order_line.product.is_course_entitlement_product:
+                    return True
+
+                entitlement_uuid = order_line.attributes.get(option=entitlement_option).value
+                try:
+                    if not UserAlreadyPlacedOrder.is_entitlement_expired(entitlement_uuid, site):
                         return True
-                    else:
-                        entitlement_uuid = order_line.attributes.get(option=entitlement_option).value
-                        try:
-                            if not UserAlreadyPlacedOrder.is_entitlement_expired(entitlement_uuid, site):
-                                return True
-                        except (ConnectTimeout, ConnectionError, HttpNotFoundError):
-                            logger.exception('Unable to get entitlement info [%s] due to a network problem',
-                                             entitlement_uuid)
+                except (ConnectTimeout, ReqConnectionError, HttpNotFoundError):
+                    logger.exception(
+                        'Unable to get entitlement info [%s] due to a network problem',
+                        entitlement_uuid
+                    )
 
         return False
 

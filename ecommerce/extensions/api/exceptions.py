@@ -1,4 +1,6 @@
 """Exceptions and error messages used by the ecommerce API."""
+
+
 from django.utils.translation import ugettext_lazy as _
 from rest_framework import status
 from rest_framework.exceptions import APIException
@@ -15,15 +17,16 @@ PRODUCT_NOT_FOUND_USER_MESSAGE = _("We couldn't find one of the products you're 
 PRODUCT_UNAVAILABLE_DEVELOPER_MESSAGE = u"Product with SKU [{sku}] is [{availability}]"
 PRODUCT_UNAVAILABLE_USER_MESSAGE = _("One of the products you're trying to order is unavailable.")
 
+LMS_USER_ID_NOT_FOUND_DEVELOPER_MESSAGE = u'Could not find lms_user_id for user [{user_id}]'
+LMS_USER_ID_NOT_FOUND_USER_MESSAGE = _("We couldn't find enough information about you to perform the calculation.")
+
 
 class ApiError(Exception):
     """Standard error raised by the API."""
-    pass
 
 
 class ProductNotFoundError(ApiError):
     """Raised when the provided SKU does not correspond to a product in the catalog."""
-    pass
 
 
 class BadRequestException(APIException):
@@ -34,4 +37,3 @@ class BadRequestException(APIException):
 class TemporaryBasketException(Exception):
     """Exception raised to force a transaction rollback so that the temporary basket
     is not saved to the database."""
-    pass

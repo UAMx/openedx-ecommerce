@@ -1,9 +1,11 @@
 """
 Tests for comprehensive theme static files finders.
 """
-from django.conf import settings
-from django.test import TestCase
 
+
+from django.conf import settings
+
+from ecommerce.tests.testcases import TestCase
 from ecommerce.theming.finders import ThemeFilesFinder
 
 

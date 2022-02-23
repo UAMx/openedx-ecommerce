@@ -1,3 +1,5 @@
+
+
 import logging
 
 from django.core.exceptions import ObjectDoesNotExist
@@ -29,6 +31,9 @@ class CheckoutView(APIView):
             'Checkout view called for basket [%s].',
             basket_id
         )
+
+        request._request.POST = request._request.POST.copy()  # pylint: disable=protected-access
+        request._request.POST['discount_jwt'] = request.data.get('discount_jwt')  # pylint: disable=protected-access
 
         # Get the basket, and make sure it belongs to the current user.
         try:

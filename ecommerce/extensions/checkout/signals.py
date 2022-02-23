@@ -1,3 +1,5 @@
+
+
 import logging
 
 import waffle
@@ -94,27 +96,26 @@ def track_completed_order(sender, order=None, **kwargs):  # pylint: disable=unus
 
 @receiver(post_checkout, dispatch_uid='send_completed_order_email')
 @silence_exceptions("Failed to send order completion email.")
-def send_course_purchase_email(sender, order=None, **kwargs):  # pylint: disable=unused-argument
-    """Send course purchase notification email when a course is purchased."""
+def send_course_purchase_email(sender, order=None, request=None, **kwargs):  # pylint: disable=unused-argument
+    """
+    Send seat purchase notification email
+    """
     if waffle.switch_is_active('ENABLE_NOTIFICATIONS'):
-        # We do not currently support email sending for orders with more than one item.
-        if len(order.lines.all()) == ORDER_LINE_COUNT:
-            product = order.lines.first().product
-            credit_provider_id = getattr(product.attr, 'credit_provider', None)
-            if not credit_provider_id:
-                logger.error(
-                    'Failed to send credit receipt notification. Credit seat product [%s] has no provider.', product.id
-                )
-                return
-            elif product.is_seat_product:
-                provider_data = get_credit_provider_details(
-                    access_token=order.site.siteconfiguration.access_token,
-                    credit_provider_id=credit_provider_id,
-                    site_configuration=order.site.siteconfiguration
-                )
+        if len(order.lines.all()) != ORDER_LINE_COUNT:
+            logger.info('Currently support receipt emails for order with one item.')
+            return
 
-                receipt_page_url = get_receipt_page_url(
-                    order_number=order.number,
+        product = order.lines.first().product
+        if product.is_seat_product or product.is_course_entitlement_product:
+            recipient = request.POST.get('req_bill_to_email', order.user.email) if request else order.user.email
+            receipt_page_url = get_receipt_page_url(
+                order_number=order.number,
+                site_configuration=order.site.siteconfiguration
+            )
+            credit_provider_id = getattr(product.attr, 'credit_provider', None)
+            if credit_provider_id:
+                provider_data = get_credit_provider_details(
+                    credit_provider_id=credit_provider_id,
                     site_configuration=order.site.siteconfiguration
                 )
 
@@ -128,8 +129,21 @@ def send_course_purchase_email(sender, order=None, **kwargs):  # pylint: disable
                             'credit_hours': product.attr.credit_hours,
                             'credit_provider': provider_data['display_name'],
                         },
-                        order.site
+                        order.site,
+                        recipient
                     )
-
-        else:
-            logger.info('Currently support receipt emails for order with one item.')
+            elif getattr(product.attr, 'certificate_type', None) == 'credit':
+                logger.error(
+                    'Failed to send credit receipt notification. Credit seat product [%s] has no provider.', product.id
+                )
+            elif order.basket.total_incl_tax != 0:
+                send_notification(
+                    order.user,
+                    'COURSE_PURCHASED',
+                    {
+                        'course_title': product.title,
+                        'receipt_page_url': receipt_page_url,
+                    },
+                    order.site,
+                    recipient
+                )

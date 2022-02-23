@@ -1,14 +1,15 @@
-import os
-from unittest import skipIf
 
+
+import os
+from unittest import SkipTest, skipIf
+
+import pytest
+from bok_choy.browser import browser
 from django.contrib.messages import constants as MSG
 from django.test import override_settings
 from django.urls import reverse
-from nose.plugins.skip import SkipTest
 from oscar.core.loading import get_model
-from oscar.test import factories
 from selenium.common.exceptions import NoSuchElementException
-from selenium.webdriver.firefox.webdriver import WebDriver
 from selenium.webdriver.support.wait import WebDriverWait
 
 from ecommerce.extensions.dashboard.orders.views import queryset_orders_for_user
@@ -17,6 +18,7 @@ from ecommerce.extensions.fulfillment.signals import SHIPPING_EVENT_NAME
 from ecommerce.extensions.fulfillment.status import LINE, ORDER
 from ecommerce.extensions.refund.tests.mixins import RefundTestMixin
 from ecommerce.extensions.test.factories import create_order
+from ecommerce.tests.factories import UserFactory
 from ecommerce.tests.testcases import LiveServerTestCase, TestCase
 
 Order = get_model('order', 'Order')
@@ -24,7 +26,7 @@ Refund = get_model('refund', 'Refund')
 ShippingEventType = get_model('order', 'ShippingEventType')
 
 
-class OrderViewTestsMixin(object):
+class OrderViewTestsMixin:
     """
     Mixin for testing dashboard order views.
 
@@ -43,13 +45,14 @@ class OrderViewTestsMixin(object):
             self.assertListEqual(list(response.context['orders']), orders)
 
 
+@pytest.mark.acceptance
 class OrderViewBrowserTestBase(LiveServerTestCase):
     @classmethod
     def setUpClass(cls):
         if os.environ.get('DISABLE_ACCEPTANCE_TESTS') == 'True':
             raise SkipTest
 
-        cls.selenium = WebDriver()
+        cls.selenium = browser()
         super(OrderViewBrowserTestBase, cls).setUpClass()
 
     @classmethod
@@ -62,7 +65,7 @@ class OrderViewBrowserTestBase(LiveServerTestCase):
 
         self.btn_selector = '[data-action=retry-fulfillment]'
         self.password = 'test'
-        self.user = factories.UserFactory(password=self.password, is_superuser=True, is_staff=True)
+        self.user = UserFactory(password=self.password, is_superuser=True, is_staff=True)
 
         self.order = create_order(user=self.user, site=self.site)
         self.order.status = ORDER.FULFILLMENT_ERROR
@@ -79,7 +82,7 @@ class OrderViewBrowserTestBase(LiveServerTestCase):
     def retry_fulfillment(self):
         """ Click the retry fulfillment button and wait for the AJAX call to finish. """
         button = self.selenium.find_element_by_css_selector(self.btn_selector)
-        self.assertEqual(unicode(self.order.number), button.get_attribute('data-order-number'))
+        self.assertEqual(str(self.order.number), button.get_attribute('data-order-number'))
         button.click()
 
         # Wait for the AJAX call to finish and display an alert
@@ -161,7 +164,7 @@ class OrderListViewBrowserTests(OrderViewTestsMixin, RefundTestMixin, OrderViewB
         response = self.client.get('{path}?username={username}'.format(
             path=self.path,
             # Cut the configured username in half, then invert the fragment's casing.
-            username=new_user.username[:len(new_user.username) / 2].swapcase()
+            username=new_user.username[:len(new_user.username) // 2].swapcase()  # pylint: disable=unsubscriptable-object
         ))
         self.assert_successful_response(response, [new_order])
 
@@ -171,7 +174,7 @@ class OrderListViewBrowserTests(OrderViewTestsMixin, RefundTestMixin, OrderViewB
 
         response = self.client.get(self.path)
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn('address', response.content)
+        self.assertNotIn('address', response.content.decode('utf-8'))
 
 
 class OrderDetailViewTests(DashboardViewTestMixin, OrderViewTestsMixin, RefundTestMixin, TestCase):
@@ -210,7 +213,7 @@ class OrderDetailViewTests(DashboardViewTestMixin, OrderViewTestsMixin, RefundTe
         # Verify a message was passed for display
         data = {
             'link_start': '<a href="{}" target="_blank">'.format(
-                reverse('dashboard:refunds:detail', kwargs={'pk': refund.pk})),
+                reverse('dashboard:refunds-detail', kwargs={'pk': refund.pk})),
             'link_end': '</a>',
             'refund_id': refund.pk
         }

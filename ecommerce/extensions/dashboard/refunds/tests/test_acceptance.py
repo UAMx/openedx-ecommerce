@@ -1,17 +1,19 @@
+
+
 import os
-from unittest import skip
+from unittest import SkipTest, skip
 
 import ddt
+import pytest
+from bok_choy.browser import browser
 from django.urls import reverse
-from nose.plugins.skip import SkipTest
 from oscar.core.loading import get_model
-from oscar.test import factories
 from selenium.common.exceptions import NoSuchElementException
-from selenium.webdriver.firefox.webdriver import WebDriver
 from selenium.webdriver.support.wait import WebDriverWait
 
 from ecommerce.extensions.refund.status import REFUND
 from ecommerce.extensions.refund.tests.mixins import RefundTestMixin
+from ecommerce.tests.factories import UserFactory
 from ecommerce.tests.testcases import LiveServerTestCase
 
 Refund = get_model('refund', 'Refund')
@@ -23,13 +25,15 @@ ALL_REFUND_STATUSES = (
 
 
 @ddt.ddt
+@pytest.mark.acceptance
 class RefundAcceptanceTestMixin(RefundTestMixin):
     @classmethod
     def setUpClass(cls):
         if os.environ.get('DISABLE_ACCEPTANCE_TESTS') == 'True':
             raise SkipTest
 
-        cls.selenium = WebDriver()
+        cls.selenium = browser()
+        cls.selenium.set_page_load_timeout(30)
         super(RefundAcceptanceTestMixin, cls).setUpClass()
 
     @classmethod
@@ -46,7 +50,7 @@ class RefundAcceptanceTestMixin(RefundTestMixin):
         self.deny_button_selector = '[data-refund-id="{}"] [data-decision="deny"]'.format(self.refund.id)
 
         self.password = 'test'
-        self.user = factories.UserFactory(password=self.password, is_superuser=True, is_staff=True)
+        self.user = UserFactory(password=self.password, is_superuser=True, is_staff=True)
 
     def _login(self):
         """Log into the service and navigate to the refund list view."""
@@ -218,7 +222,7 @@ class RefundListViewTests(RefundAcceptanceTestMixin, LiveServerTestCase):
 
     def setUp(self):
         super(RefundListViewTests, self).setUp()
-        self.path = reverse('dashboard:refunds:list')
+        self.path = reverse('dashboard:refunds-list')
 
 
 class RefundDetailViewTests(RefundAcceptanceTestMixin, LiveServerTestCase):
@@ -226,4 +230,4 @@ class RefundDetailViewTests(RefundAcceptanceTestMixin, LiveServerTestCase):
 
     def setUp(self):
         super(RefundDetailViewTests, self).setUp()
-        self.path = reverse('dashboard:refunds:detail', args=[self.refund.id])
+        self.path = reverse('dashboard:refunds-detail', args=[self.refund.id])

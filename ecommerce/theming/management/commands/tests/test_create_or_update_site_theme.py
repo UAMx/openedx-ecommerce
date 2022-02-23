@@ -1,10 +1,12 @@
 """
 Tests for management command for creating or updating site themes.
 """
+
+
 from django.contrib.sites.models import Site
 from django.core.management import CommandError, call_command
-from django.test import TestCase
 
+from ecommerce.tests.testcases import TestCase
 from ecommerce.theming.models import SiteTheme
 
 

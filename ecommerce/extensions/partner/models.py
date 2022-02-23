@@ -1,6 +1,13 @@
+
+
 from django.db import models
 from django.utils.translation import ugettext_lazy as _
-from oscar.apps.partner.abstract_models import AbstractPartner
+from oscar.apps.partner.abstract_models import AbstractPartner, AbstractStockRecord
+from simple_history.models import HistoricalRecords
+
+
+class StockRecord(AbstractStockRecord):
+    history = HistoricalRecords()
 
 
 class Partner(AbstractPartner):
@@ -10,7 +17,9 @@ class Partner(AbstractPartner):
                                           help_text='DEPRECATED: Use SiteConfiguration!')
     default_site = models.OneToOneField('sites.Site', null=True, blank=True, on_delete=models.PROTECT)
 
-    class Meta(object):
+    history = HistoricalRecords(excluded_fields=['code'])
+
+    class Meta:
         # Model name that will appear in the admin panel
         verbose_name = _('Partner')
         verbose_name_plural = _('Partners')

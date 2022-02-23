@@ -1,11 +1,14 @@
 """
 Comprehensive Theming tests for Theme App Config.
 """
+
+
 import mock
 from django.conf import settings
-from django.test import TestCase, override_settings
+from django.test import override_settings
 
 from ecommerce import theming
+from ecommerce.tests.testcases import TestCase
 from ecommerce.theming.apps import ThemeAppConfig
 
 

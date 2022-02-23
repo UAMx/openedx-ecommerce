@@ -195,7 +195,7 @@ define([], function() {
                 name: 'TESTCAT'
             },
             course_catalog: null,
-            enterprise_customer: '42a30ade47834489a607cd0f52ba13cf',
+            enterprise_customer: {id: '349bef52-c0fb-4901-a5b5-26e9b70a4102', name: 'test client'},
             price: '100.00',
             invoice_type: 'Prepaid',
             invoice_discount_type: 'Percentage',
@@ -235,7 +235,7 @@ define([], function() {
                 id: 4,
                 name: 'TESTCAT'
             },
-            enterprise_customer: '42a30ade47834489a607cd0f52ba13cf',
+            enterprise_customer: {id: '349bef52-c0fb-4901-a5b5-26e9b70a4102', name: 'test client'},
             enterprise_customer_catalog: 'f9098aab184245c881a20e53d8e7609a',
             invoice_type: 'Prepaid',
             invoice_discount_type: 'Percentage',
@@ -259,7 +259,9 @@ define([], function() {
             voucher_type: 'Single use',
             enterprise_customer: {id: '349bef52-c0fb-4901-a5b5-26e9b70a4102', name: 'test client'},
             enterprise_customer_catalog: 'f9098aab-1842-45c8-81a2-0e53d8e7609a',
-            notify_email: 'batman@gotham.comics'
+            notify_email: 'batman@gotham.comics',
+            contract_discount_value: 30,
+            prepaid_invoice_amount: 10000
         },
         couponAPIResponseData = {
             count: 1,
@@ -365,6 +367,7 @@ define([], function() {
             voucher_type: 'Multi-use',
             max_uses: '5',
             benefit_type: 'Percentage',
+            num_uses: '3',
             benefit_value: 100
         };
     return {
