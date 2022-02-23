@@ -120,7 +120,7 @@ AUTHENTICATION_BACKENDS = (
     'django.contrib.auth.backends.ModelBackend',
 )
 
-OSCAR_DEFAULT_CURRENCY = 'USD'
+OSCAR_DEFAULT_CURRENCY = 'EUR'
 # END ORDER PROCESSING
 
 

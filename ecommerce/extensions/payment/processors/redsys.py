@@ -117,7 +117,7 @@ class Redsys(BasePaymentProcessor):
             "DS_MERCHANT_URLKO": str(self.error_page_url)
         }
         json_data = json.dumps(merchant_data)
-        b64_params = base64.b64encode(json_data)
+        b64_params = base64.b64encode(json_data.encode())
 
         #REAL:
         #signature = compute_signature(self.order_number, b64_params, self.shared_secret)
